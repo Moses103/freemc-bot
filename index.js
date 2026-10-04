@@ -2,9 +2,9 @@ const mineflayer = require('mineflayer');
 
 function createBot() {
   const bot = mineflayer.createBot({
-    host: 'YOUR-SERVER-IP.freemcserver.net', // Replace with your FreeMC IP
-    port: 25565,                            // Replace with your FreeMC Port
-    username: 'KeepAliveBot'
+    host: '51.222.8.7', // Replace with your FreeMC IP
+    port: 49379,                            // Replace with your FreeMC Port
+    username: 'KeepAlive'
   });
 
   bot.on('spawn', () => {
