@@ -3,7 +3,7 @@ const https = require('https');
 
 const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
-const MC_VERSION = process.env.MC_VERSION || '1.21';
+const MC_VERSION = process.env.MC_VERSION || '1.21.1';
 
 const PANEL_DOMAIN = 'www.powerupstack.com';
 const INSTANCE_PATH = '/panel/instances/01a1424f-1513-78f6-894d-728833e3fdb5/console';
@@ -48,32 +48,43 @@ function createBot() {
     auth: 'offline',
     version: MC_VERSION,
     family: 4,
-    checkTimeoutInterval: 60 * 1000
+    checkTimeoutInterval: 60 * 1000,
+    hideErrors: false
   });
 
-  // Track raw network client events
+  // Catch packet parsing errors (like PartialReadError) to prevent socket drops
+  bot._client.on('error', (err) => {
+    if (err.name === 'PartialReadError') {
+      console.log('[Protocol Warning] Ignored unparseable packet from server (PartialReadError).');
+      return;
+    }
+    console.log('[Protocol Error]:', err.message);
+  });
+
   bot._client.on('connect', () => {
     console.log('[Net Status] TCP socket established.');
   });
 
-  bot._client.on('packet', (data, metadata) => {
-    // Log disconnect or kick packets sent by server
-    if (metadata.name === 'disconnect' || metadata.name === 'kick_disconnect') {
-      console.log('[Server Raw Disconnect Packet]:', JSON.stringify(data));
-    }
-  });
-
   bot.on('login', () => {
-    console.log('[Net Status] Handshake accepted by server (Login Packet received).');
+    console.log('[Net Status] Handshake accepted by server.');
   });
 
   bot.on('spawn', () => {
-    console.log('[Net Status] Entity spawned event triggered.');
+    console.log('[Net Status] Bot in world/limbo.');
 
+    // Registration/login attempt
     setTimeout(() => {
       bot.chat('/register KeepAlive123 KeepAlive123');
       bot.chat('/login KeepAlive123');
-    }, 1000);
+    }, 2000);
+
+    // Periodic action to stay connected in limbo
+    setInterval(() => {
+      if (bot.entity) {
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.setControlState('jump', false), 500);
+      }
+    }, 15000);
   });
 
   bot.on('message', (jsonMsg) => {
@@ -86,7 +97,6 @@ function createBot() {
 
   bot.on('error', (err) => {
     console.log('[Mineflayer Error]:', err.message);
-    
     if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code) && !useWebFallback) {
       console.log(`[Fallback] Switch to Web Ping due to ${err.code}...`);
       useWebFallback = true;
@@ -98,8 +108,8 @@ function createBot() {
   bot.on('end', (reason) => {
     console.log(`[Net Status] Socket closed. Reason: ${reason}`);
     if (!useWebFallback) {
-      console.log('[Reconnecting] Retrying in 20 seconds...');
-      setTimeout(createBot, 20000);
+      console.log('[Reconnecting] Retrying in 15 seconds...');
+      setTimeout(createBot, 15000);
     }
   });
 }
