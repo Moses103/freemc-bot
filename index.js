@@ -13,7 +13,7 @@ http.createServer((req, res) => {
 // Config
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const username = process.env.BOT_USERNAME || 'KeepAlive';
+const username = process.env.BOT_USERNAME || 'KeepALive';
 const version = process.env.MC_VERSION || false;       // false = auto-detect
 const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
 const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
@@ -115,3 +115,8 @@ async function createBot() {
     clearTimers();
     clearTimeout(reconnectTimeout);
     reconnectTimeout = setTimeout(createBot, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 120000);
+  });
+}
+
+createBot();
