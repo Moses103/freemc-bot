@@ -25,7 +25,8 @@ function createBot() {
     host,
     port,
     username,
-    version
+    version,
+    checkTimeoutInterval: 60 * 1000 // Prevents false socket timeout disconnects
   });
 
   bot.on('login', () => {
@@ -33,31 +34,29 @@ function createBot() {
   });
 
   bot.on('spawn', () => {
-    console.log('[Bot] Spawned in world. Starting anti-AFK timers...');
+    console.log('[Bot] Spawned in world! Starting anti-AFK timers...');
 
-    // Clear any leftover timers from previous sessions
-    clearInterval(crouchInterval);
-    clearInterval(jumpInterval);
+    // Clear existing intervals if reconnecting
+    if (crouchInterval) clearInterval(crouchInterval);
+    if (jumpInterval) clearInterval(jumpInterval);
 
-    // Crouch (sneak) every 10 seconds (10,000 ms)
+    // Crouch (sneak) every 10 seconds
     crouchInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('sneak', true);
       console.log('[Anti-AFK] Crouched');
 
-      // Hold crouch for 1 second, then stand up
       setTimeout(() => {
         bot.setControlState('sneak', false);
       }, 1000);
     }, 10000);
 
-    // Jump every 15 seconds (15,000 ms)
+    // Jump every 15 seconds
     jumpInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('jump', true);
       console.log('[Anti-AFK] Jumped');
 
-      // Release jump state after 0.5 seconds
       setTimeout(() => {
         bot.setControlState('jump', false);
       }, 500);
@@ -72,11 +71,10 @@ function createBot() {
     console.error('[Bot] Error caught:', err.message || err);
   });
 
-  // Clean up timers and attempt reconnect on disconnect
   bot.on('end', (reason) => {
-    console.log(`[Bot] Disconnected (${reason}). Clearing timers and reconnecting in 10s...`);
-    clearInterval(crouchInterval);
-    clearInterval(jumpInterval);
+    console.log(`[Bot] Connection ended (${reason}). Reconnecting in 10 seconds...`);
+    if (crouchInterval) clearInterval(crouchInterval);
+    if (jumpInterval) clearInterval(jumpInterval);
     setTimeout(createBot, 10000);
   });
 }
