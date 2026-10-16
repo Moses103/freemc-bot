@@ -16,7 +16,7 @@ function createBot() {
 
   const bot = mineflayer.createBot({
     host: process.env.SERVER_HOST || 'stablesmp.playserver.pro',
-    port: parseInt(process.env.SERVER_PORT, 10) || 25565,
+    port: parseInt(process.env.SERVER_PORT, 10) || 33838,
     username: process.env.BOT_USERNAME || 'RailwayBot',
     version: process.env.MC_VERSION || '1.21.11'
   });
