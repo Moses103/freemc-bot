@@ -1,10 +1,8 @@
 const mineflayer = require('mineflayer');
 const https = require('https');
 
-// Always use the domain to avoid dynamic IP shift issues
 const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
-// Properly uses environment variable or defaults to 1.21
 const MC_VERSION = process.env.MC_VERSION || '1.21';
 
 const PANEL_DOMAIN = 'www.powerupstack.com';
@@ -35,6 +33,12 @@ function pingPowerupStackWeb() {
   req.end();
 }
 
+function sendAuth(bot) {
+  console.log('[Bot Auth] Sending /register and /login commands...');
+  bot.chat('/register KeepAlive123 KeepAlive123');
+  bot.chat('/login KeepAlive123');
+}
+
 function createBot() {
   if (useWebFallback) {
     pingPowerupStackWeb();
@@ -54,12 +58,9 @@ function createBot() {
     checkTimeoutInterval: 60 * 1000
   });
 
-  // Safely hook protocol deserializer once connection attaches it
   bot._client.on('session', () => {
     if (bot._client.deserializer) {
-      bot._client.deserializer.on('error', (err) => {
-        // Silently discard packet decode errors (e.g. PartialReadError on 1.21.11 items)
-      });
+      bot._client.deserializer.on('error', (err) => {});
     }
   });
 
@@ -79,12 +80,10 @@ function createBot() {
   });
 
   bot.on('spawn', () => {
-    console.log('>>> SUCCESS: Bot joined the Paper server! <<<');
-
-    setTimeout(() => {
-      bot.chat('/register KeepAlive123 KeepAlive123');
-      bot.chat('/login KeepAlive123');
-    }, 2000);
+    console.log('>>> SUCCESS: Bot spawned (Queue/Limbo or Main World) <<<');
+    
+    // Attempt auth immediately upon spawn
+    setTimeout(() => sendAuth(bot), 2000);
 
     // Keep active with periodic jumping
     setInterval(() => {
@@ -95,8 +94,14 @@ function createBot() {
     }, 15000);
   });
 
+  // Listen for chat prompts (like "/login" or world transfer messages) and re-trigger auth
   bot.on('message', (jsonMsg) => {
-    console.log('[Server Chat]:', jsonMsg.toString());
+    const messageText = jsonMsg.toString();
+    console.log('[Server Chat]:', messageText);
+
+    if (messageText.includes('/register') || messageText.includes('/login') || messageText.includes('destination server')) {
+      setTimeout(() => sendAuth(bot), 1000);
+    }
   });
 
   bot.on('kicked', (reason) => {
