@@ -46,7 +46,7 @@ function createBot() {
     port: MC_PORT,
     username: process.env.MC_USERNAME || 'KeepAliveBot',
     auth: 'offline',
-    version: '1.21.1', // Handshake version for mineflayer core
+    version: '1.21', // Handshake version for mineflayer core
     family: 4,
     connectTimeout: 30000,
     checkTimeoutInterval: 60 * 1000
