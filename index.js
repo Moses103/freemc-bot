@@ -7,7 +7,7 @@ function createBot() {
     host: '15.235.182.152', // Subdomain host
     port: 33838,                      // Your specific server port
     username: 'KeepAlive',
-    version: '1.21.11',                 // Explicitly pin version to prevent autoVersion ETIMEDOUT crashes
+    auth: 'offline',                // Explicitly pin version to prevent autoVersion ETIMEDOUT crashes
     checkTimeoutInterval: 60 * 1000   // Keepalive timeout threshold
   });
 
