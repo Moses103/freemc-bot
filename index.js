@@ -1,4 +1,81 @@
 const mineflayer = require('mineflayer');
+const mc = require('minecraft-protocol');
+const http = require('http');
+
+// HTTP server for Railway health checks
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Minecraft Bot is operational.\n');
+}).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
+
+// Config
+const host = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
+const port = parseInt(process.env.SERVER_PORT || '33838', 10);
+const username = process.env.BOT_USERNAME || 'KeepALive';
+const version = process.env.MC_VERSION || false;       // false = auto-detect
+const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
+const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
+
+let crouchInterval = null;
+let jumpInterval = null;
+let reconnectTimeout = null;
+let reconnectDelay = 10000;
+
+function clearTimers() {
+  if (crouchInterval) clearInterval(crouchInterval);
+  if (jumpInterval) clearInterval(jumpInterval);
+  crouchInterval = jumpInterval = null;
+}
+
+function createBot() {
+  console.log(`[Bot] Connecting to ${host}:${port} as ${username} (auth: ${auth})...`);
+
+  // Ping the server first so the logs show what it's actually running
+  mc.ping({ host, port }, (err, res) => {
+    if (err) return console.error('[Ping] Failed:', err.code || err.message);
+    console.log(`[Ping] Online. Version: ${res.version.name} (protocol ${res.version.protocol}), players: ${res.players.online}/${res.players.max}`);
+  });
+
+  const bot = mineflayer.createBot({
+    host,
+    port,
+    username,
+    version,
+    auth,
+    checkTimeoutInterval: 60 * 1000
+  });
+
+  bot._client.on('connect', () => console.log('[Bot] TCP connected'));
+
+  // Watchdog: force a reconnect if login never completes
+  const watchdog = setTimeout(() => {
+    console.log('[Bot] No login after 30s, forcing reconnect');
+    bot.end('login timeout');
+  }, 30000);
+
+  bot.once('login', () => {
+    clearTimeout(watchdog);
+    console.log(`[Bot] Logged in as ${username}`);
+    reconnectDelay = 10000;
+  });
+
+  if (serverPassword) {
+    bot.on('messagestr', (msg) => {
+      const m = msg.toLowerCase();
+      if (m.includes('/register')) bot.chat(`/register ${serverPassword} ${serverPassword}`);
+      else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
+    });
+  }
+
+  bot.once('spawn', () => {
+    console.log('[Bot] Spawned! Starting anti-AFK timers...');
+    clearTimers();
+
+    crouchInterval = setInterval(() => {
+      if (!bot.entity) return;
+      bot.setControlState('sneak', true);
+      setTimeout(() =>const mineflayer = require('mineflayer');
 const http = require('http');
 
 // HTTP server for Railway health checks
