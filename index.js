@@ -1,87 +1,83 @@
 const mineflayer = require('mineflayer');
 const http = require('http');
 
-// 1. HTTP server binding for Railway health checks
+// HTTP server for Railway health checks
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Minecraft Bot is operational.\n');
-}).listen(PORT, () => {
-  console.log(`[HTTP] Web server listening on port ${PORT}`);
-});
+}).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
-// Global interval identifiers
+// Config
+const host = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
+const port = parseInt(process.env.SERVER_PORT || '33838', 10);
+const username = process.env.BOT_USERNAME || 'KeepALive';
+const version = process.env.MC_VERSION || false;       // false = auto-detect
+const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
+const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
+
 let crouchInterval = null;
 let jumpInterval = null;
+let reconnectTimeout = null;
+let reconnectDelay = 10000;
+
+function clearTimers() {
+  if (crouchInterval) clearInterval(crouchInterval);
+  if (jumpInterval) clearInterval(jumpInterval);
+  crouchInterval = jumpInterval = null;
+}
 
 function createBot() {
-  const host = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
-  const username = process.env.BOT_USERNAME || 'KeepALive';
-  const version = process.env.MC_VERSION || '1.21.11';
+  console.log(`[Bot] Connecting to ${host}:${port} as ${username} (auth: ${auth})...`);
 
-  console.log(`[Bot] Connecting to ${host} (using SRV resolution)...`);
-
-  // Force port 25565 so Mineflayer executes an automated DNS SRV record lookup
   const bot = mineflayer.createBot({
     host,
-    port: 25565,
+    port,
     username,
     version,
+    auth,
     checkTimeoutInterval: 60 * 1000
   });
 
-  bot.on('login', () => {
-    console.log(`[Bot] Connected as ${username} to ${host}`);
+  bot.once('login', () => {
+    console.log(`[Bot] Logged in as ${username}`);
+    reconnectDelay = 10000;
   });
 
-  bot.on('spawn', () => {
-    console.log('[Bot] Spawned in world! Starting anti-AFK timers...');
+  if (serverPassword) {
+    bot.on('messagestr', (msg) => {
+      const m = msg.toLowerCase();
+      if (m.includes('/register')) bot.chat(`/register ${serverPassword} ${serverPassword}`);
+      else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
+    });
+  }
 
-    // Clear active timers on reconnect
-    if (crouchInterval) clearInterval(crouchInterval);
-    if (jumpInterval) clearInterval(jumpInterval);
+  bot.once('spawn', () => {
+    console.log('[Bot] Spawned! Starting anti-AFK timers...');
+    clearTimers();
 
-    // Crouch (sneak) every 10 seconds
     crouchInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('sneak', true);
-      console.log('[Anti-AFK] Crouched');
-
-      setTimeout(() => {
-        if (bot.entity) bot.setControlState('sneak', false);
-      }, 1000);
+      setTimeout(() => bot.entity && bot.setControlState('sneak', false), 1000);
     }, 10000);
 
-    // Jump every 15 seconds
     jumpInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('jump', true);
-      console.log('[Anti-AFK] Jumped');
-
-      setTimeout(() => {
-        if (bot.entity) bot.setControlState('jump', false);
-      }, 500);
+      setTimeout(() => bot.entity && bot.setControlState('jump', false), 500);
     }, 15000);
   });
 
-  bot.on('kicked', (reason) => {
-    console.log('[Bot] Kicked from server:', JSON.stringify(reason));
-  });
+  bot.on('kicked', (reason) => console.log('[Bot] Kicked:', JSON.stringify(reason)));
+  bot.on('error', (err) => console.error('[Bot] Error:', err.message || err));
 
-  bot.on('error', (err) => {
-    console.error('[Bot] Error caught:', err.message || err);
-  });
-
-  bot.on('end', (reason) => {
-    console.log(`[Bot] Disconnected (${reason}). Reconnecting in 10 seconds...`);
-
-    if (crouchInterval) clearInterval(crouchInterval);
-    if (jumpInterval) clearInterval(jumpInterval);
-
-    crouchInterval = null;
-    jumpInterval = null;
-
-    setTimeout(createBot, 10000);
+  bot.once('end', (reason) => {
+    console.log(`[Bot] Disconnected (${reason}). Reconnecting in ${reconnectDelay / 1000}s...`);
+    clearTimers();
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = setTimeout(createBot, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 120000);
   });
 }
 
