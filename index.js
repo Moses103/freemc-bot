@@ -1,13 +1,10 @@
 const mineflayer = require('mineflayer');
 const https = require('https');
 
-// Primary Domain or IP fallback
 const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
-// Explicitly specify version to bypass autoVersion ping (-1 error)
-const MC_VERSION = process.env.MC_VERSION || '1.21.11';
+const MC_VERSION = process.env.MC_VERSION || '1.21';
 
-// PowerupStack Web Panel Fallback Config
 const PANEL_DOMAIN = 'www.powerupstack.com';
 const INSTANCE_PATH = '/panel/instances/01a1424f-1513-78f6-894d-728833e3fdb5/console';
 
@@ -49,7 +46,7 @@ function createBot() {
     port: MC_PORT,
     username: process.env.MC_USERNAME || 'KeepAliveBot',
     auth: 'offline',
-    version: MC_VERSION, // Hardcoded version prevents auto-version handshake errors
+    version: MC_VERSION,
     family: 4,
     checkTimeoutInterval: 60 * 1000
   });
@@ -60,22 +57,36 @@ function createBot() {
 
   bot.on('spawn', () => {
     console.log('>>> SUCCESS: Bot joined the Minecraft server in-game! <<<');
-    
-    // Jump every 30 seconds to maintain activity
+
+    // Auto-login attempt if server uses AuthMe/nLogin
+    setTimeout(() => {
+      bot.chat('/register KeepAlive123 KeepAlive123');
+      bot.chat('/login KeepAlive123');
+    }, 1000);
+
+    // Keep active with movement
     setInterval(() => {
       if (bot.entity) {
         bot.setControlState('jump', true);
         setTimeout(() => bot.setControlState('jump', false), 500);
       }
-    }, 30000);
+    }, 15000);
+  });
+
+  // Log incoming chat messages to see kick/disconnect reasons
+  bot.on('message', (jsonMsg) => {
+    console.log('[Server Chat]:', jsonMsg.toString());
+  });
+
+  bot.on('kicked', (reason) => {
+    console.log('[Server Kick Reason]:', reason);
   });
 
   bot.on('error', (err) => {
     console.log('Mineflayer Error:', err.message);
     
     if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code) && !useWebFallback) {
-      console.log(`Connection refused or lost on port ${MC_PORT}.`);
-      console.log('Activating PowerupStack web ping fallback...');
+      console.log(`Connection refused on port ${MC_PORT}. Switching to Web Ping fallback...`);
       useWebFallback = true;
       pingPowerupStackWeb();
       setInterval(pingPowerupStackWeb, 2 * 60 * 1000);
@@ -85,8 +96,8 @@ function createBot() {
   bot.on('end', (reason) => {
     console.log(`Disconnected (${reason}).`);
     if (!useWebFallback) {
-      console.log('Reconnecting bot in 15 seconds...');
-      setTimeout(createBot, 15000);
+      console.log('Reconnecting bot in 30 seconds...');
+      setTimeout(createBot, 30000);
     }
   });
 }
