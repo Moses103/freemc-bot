@@ -14,17 +14,22 @@ let crouchInterval = null;
 let jumpInterval = null;
 
 function createBot() {
-  console.log('[Bot] Connecting to Minecraft server...');
+  const host = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
+  const port = parseInt(process.env.SERVER_PORT, 10) || 25565;
+  const username = process.env.BOT_USERNAME || 'RailwayBot';
+  const version = process.env.MC_VERSION || '1.21.11';
+
+  console.log(`[Bot] Connecting to ${host}:${port}...`);
 
   const bot = mineflayer.createBot({
-    host: process.env.SERVER_HOST || 'stablesmp.playserver.pro',
-    port: parseInt(process.env.SERVER_PORT, 10) || 25565,
-    username: process.env.BOT_USERNAME || 'RailwayBot',
-    version: process.env.MC_VERSION || '1.21.11'
+    host,
+    port,
+    username,
+    version
   });
 
   bot.on('login', () => {
-    console.log(`[Bot] Connected as ${bot.username} to ${bot.options.host}:${bot.options.port}`);
+    console.log(`[Bot] Connected as ${username} to ${host}:${port}`);
   });
 
   bot.on('spawn', () => {
