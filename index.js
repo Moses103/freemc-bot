@@ -57,7 +57,7 @@ function createBot() {
     port: MC_PORT,
     username: process.env.MC_USERNAME || 'KeepAlive',
     auth: 'offline',
-    version: '1.21.1',
+    version: '1.21.11',
     checkTimeoutInterval: 60 * 1000
   });
 
