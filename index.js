@@ -10,7 +10,6 @@ http.createServer((req, res) => {
   console.log(`[HTTP] Web server listening on port ${PORT}`);
 });
 
-// Explicitly declare global interval variables to prevent ReferenceErrors
 let crouchInterval = null;
 let jumpInterval = null;
 
@@ -27,6 +26,7 @@ function createBot() {
     port,
     username,
     version,
+    skipValidation: true, // Bypass DNS SRV lookup delays
     checkTimeoutInterval: 60 * 1000
   });
 
@@ -37,11 +37,9 @@ function createBot() {
   bot.on('spawn', () => {
     console.log('[Bot] Spawned in world! Starting anti-AFK timers...');
 
-    // Clear any active timers before creating new ones
     if (crouchInterval) clearInterval(crouchInterval);
     if (jumpInterval) clearInterval(jumpInterval);
 
-    // Crouch (sneak) every 10 seconds (10,000 ms)
     crouchInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('sneak', true);
@@ -52,7 +50,6 @@ function createBot() {
       }, 1000);
     }, 10000);
 
-    // Jump every 15 seconds (15,000 ms)
     jumpInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('jump', true);
@@ -72,13 +69,12 @@ function createBot() {
     console.error('[Bot] Error caught:', err.message || err);
   });
 
-  // Always clear intervals on disconnect and schedule reconnection
   bot.on('end', (reason) => {
     console.log(`[Bot] Connection ended (${reason}). Reconnecting in 10 seconds...`);
-    
+
     if (crouchInterval) clearInterval(crouchInterval);
     if (jumpInterval) clearInterval(jumpInterval);
-    
+
     crouchInterval = null;
     jumpInterval = null;
 
@@ -86,5 +82,4 @@ function createBot() {
   });
 }
 
-// Start the bot loop
 createBot();
