@@ -1,6 +1,7 @@
 const mineflayer = require('mineflayer');
 const https = require('https');
 
+// Use the domain directly instead of hardcoded numeric IPs
 const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
 const MC_VERSION = process.env.MC_VERSION || '1.21.1';
@@ -39,7 +40,7 @@ function createBot() {
     return;
   }
 
-  console.log(`[Connect Attempt] Connecting to ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
+  console.log(`[Connect Attempt] Resolving domain ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
 
   const bot = mineflayer.createBot({
     host: MC_HOST,
@@ -47,22 +48,22 @@ function createBot() {
     username: process.env.MC_USERNAME || 'KeepAliveBot',
     auth: 'offline',
     version: MC_VERSION,
-    family: 4,
-    checkTimeoutInterval: 60 * 1000,
-    hideErrors: false
+    family: 4, // Forces DNS lookup to resolve the domain to IPv4
+    connectTimeout: 30000, // Extends connection timeout window to 30 seconds
+    checkTimeoutInterval: 60 * 1000
   });
 
-  // Catch packet parsing errors (like PartialReadError) to prevent socket drops
+  // Ignore non-fatal packet decoding errors (e.g., PartialReadError)
   bot._client.on('error', (err) => {
     if (err.name === 'PartialReadError') {
-      console.log('[Protocol Warning] Ignored unparseable packet from server (PartialReadError).');
+      console.log('[Protocol Warning] Ignored unparseable packet from server.');
       return;
     }
     console.log('[Protocol Error]:', err.message);
   });
 
   bot._client.on('connect', () => {
-    console.log('[Net Status] TCP socket established.');
+    console.log(`[Net Status] TCP socket established with ${MC_HOST}:${MC_PORT}.`);
   });
 
   bot.on('login', () => {
@@ -70,15 +71,13 @@ function createBot() {
   });
 
   bot.on('spawn', () => {
-    console.log('[Net Status] Bot in world/limbo.');
+    console.log('[Net Status] Bot spawned in world/limbo.');
 
-    // Registration/login attempt
     setTimeout(() => {
       bot.chat('/register KeepAlive123 KeepAlive123');
       bot.chat('/login KeepAlive123');
     }, 2000);
 
-    // Periodic action to stay connected in limbo
     setInterval(() => {
       if (bot.entity) {
         bot.setControlState('jump', true);
@@ -108,8 +107,8 @@ function createBot() {
   bot.on('end', (reason) => {
     console.log(`[Net Status] Socket closed. Reason: ${reason}`);
     if (!useWebFallback) {
-      console.log('[Reconnecting] Retrying in 15 seconds...');
-      setTimeout(createBot, 15000);
+      console.log('[Reconnecting] Retrying in 20 seconds...');
+      setTimeout(createBot, 20000);
     }
   });
 }
