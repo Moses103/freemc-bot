@@ -1,23 +1,47 @@
-const axios = require('axios');
+const https = require('https');
 
-const PANEL_URL = process.env.PANEL_URL || 'https://panel.powerupstack.com';
-const API_KEY = process.env.POWERUPSTACK_API_KEY;
-const SERVER_ID = process.env.POWERUPSTACK_SERVER_ID;
+// REPLACE 'panel.yourdomain.com' WITH YOUR ACTUAL POWERUPSTACK PANEL DOMAIN
+const PANEL_DOMAIN = process.env.PANEL_DOMAIN || 'panel.yourdomain.com'; 
+const API_KEY = process.env.POWERUPSTACK_API_KEY;  
+const SERVER_ID = process.env.POWERUPSTACK_SERVER_ID; 
 
-async function keepServerAlive() {
-  try {
-    const response = await axios.get(`${PANEL_URL}/api/client/servers/${SERVER_ID}`, {
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-        'Accept': 'application/json'
+function keepAlive() {
+  if (!API_KEY || !SERVER_ID) {
+    console.log('Missing POWERUPSTACK_API_KEY or POWERUPSTACK_SERVER_ID in Railway variables.');
+    return;
+  }
+
+  const options = {
+    hostname: PANEL_DOMAIN.replace(/^https?:\/\//, ''), // Strips https:// if present
+    path: `/api/client/servers/${SERVER_ID}`,
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Accept': 'application/json'
+    }
+  };
+
+  const req = https.request(options, (res) => {
+    let data = '';
+    res.on('data', (chunk) => { data += chunk; });
+    res.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        const status = parsed.attributes ? parsed.attributes.current_state : 'Unknown';
+        console.log(`[${new Date().toLocaleTimeString()}] PowerupStack Status: ${status}`);
+      } catch (e) {
+        console.log(`Received status code ${res.statusCode} from panel API.`);
       }
     });
-    console.log(`[${new Date().toLocaleTimeString()}] PowerupStack Status: ${response.data.attributes.current_state}`);
-  } catch (error) {
-    console.error('Failed to ping PowerupStack API:', error.response?.data || error.message);
-  }
+  });
+
+  req.on('error', (err) => {
+    console.error('API Ping Error:', err.message);
+  });
+
+  req.end();
 }
 
-// Ping panel every 3 minutes to keep instance awake
-setInterval(keepServerAlive, 3 * 60 * 1000);
-keepServerAlive();
+// Ping every 3 minutes
+setInterval(keepAlive, 3 * 60 * 1000);
+keepAlive();
