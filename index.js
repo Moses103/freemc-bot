@@ -8,7 +8,7 @@ function createBot() {
     port: parseInt(process.env.MC_PORT) || 33838,
     username: process.env.MC_USERNAME || 'KeepAlive',
     auth: 'offline',                  // Bypasses Microsoft auth ping
-    version: '1.21.1',                 // Hardcodes version to skip ping.js ETIMEDOUT crashes
+    version: '1.21.11',                 // Hardcodes version to skip ping.js ETIMEDOUT crashes
     checkTimeoutInterval: 60 * 1000
   });
 
