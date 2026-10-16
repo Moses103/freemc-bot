@@ -1,7 +1,6 @@
 const mineflayer = require('mineflayer');
 const https = require('https');
 
-// Read from Railway Environment Variables
 const MC_HOST = process.env.MC_HOST || '15.235.182.152';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
 const PANEL_DOMAIN = process.env.PANEL_DOMAIN || 'stablesmp.playserver.pro';
@@ -73,9 +72,10 @@ function createBot() {
 
   bot.on('error', (err) => {
     console.log('Bot encountered an error:', err.message);
-    if (err.code === 'ETIMEDOUT') {
-      console.log('ETIMEDOUT detected. PowerupStack is blocking game socket joins from Railway.');
-      console.log('Switching to PowerupStack Panel API ping fallback mode...');
+    
+    // Triggers fallback on ETIMEDOUT, ECONNREFUSED, or any network failure
+    if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code)) {
+      console.log(`Network error (${err.code}). Switching to PowerupStack Panel API ping fallback...`);
       useApiFallback = true;
       pingPanelApi();
       setInterval(pingPanelApi, 3 * 60 * 1000); // Ping panel every 3 minutes
