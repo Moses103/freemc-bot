@@ -4,7 +4,7 @@ function createBot() {
   console.log('Connecting to Minecraft server...');
 
   const bot = mineflayer.createBot({
-    host: 'stablesmp.playserver.pro', // Subdomain host
+    host: '15.235.182.152', // Subdomain host
     port: 33838,                      // Your specific server port
     username: 'KeepAlive',
     version: '1.21.11',                 // Explicitly pin version to prevent autoVersion ETIMEDOUT crashes
