@@ -26,7 +26,35 @@ function createBot() {
   });
 
   bot.on('spawn', () => {
-    console.log('[Bot] Spawned in the world!');
+    console.log('[Bot] Spawned in world. Starting anti-AFK timers...');
+
+    // Clear any leftover timers from previous sessions
+    clearInterval(crouchInterval);
+    clearInterval(jumpInterval);
+
+    // Crouch (sneak) every 10 seconds (10,000 ms)
+    crouchInterval = setInterval(() => {
+      if (!bot.entity) return;
+      bot.setControlState('sneak', true);
+      console.log('[Anti-AFK] Crouched');
+
+      // Hold crouch for 1 second, then stand up
+      setTimeout(() => {
+        bot.setControlState('sneak', false);
+      }, 1000);
+    }, 10000);
+
+    // Jump every 15 seconds (15,000 ms)
+    jumpInterval = setInterval(() => {
+      if (!bot.entity) return;
+      bot.setControlState('jump', true);
+      console.log('[Anti-AFK] Jumped');
+
+      // Release jump state after 0.5 seconds
+      setTimeout(() => {
+        bot.setControlState('jump', false);
+      }, 500);
+    }, 15000);
   });
 
   // Handle anti-AFK kick or server restart kicks gracefully
