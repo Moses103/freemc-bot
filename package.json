@@ -1,12 +1,11 @@
 {
-  "name": "freemc-keepalive",
+  "name": "minecraft-railway-bot",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.0",
-    "mineflayer": "^4.20.0"
+    "mineflayer": "^4.23.0"
   }
 }
