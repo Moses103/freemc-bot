@@ -39,7 +39,7 @@ function createBot() {
     return;
   }
 
-  console.log(`Connecting Mineflayer bot to ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
+  console.log(`[Connect Attempt] Connecting to ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
 
   const bot = mineflayer.createBot({
     host: MC_HOST,
@@ -51,42 +51,44 @@ function createBot() {
     checkTimeoutInterval: 60 * 1000
   });
 
+  // Track raw network client events
   bot._client.on('connect', () => {
-    console.log('TCP Socket connected! Server port is OPEN.');
+    console.log('[Net Status] TCP socket established.');
+  });
+
+  bot._client.on('packet', (data, metadata) => {
+    // Log disconnect or kick packets sent by server
+    if (metadata.name === 'disconnect' || metadata.name === 'kick_disconnect') {
+      console.log('[Server Raw Disconnect Packet]:', JSON.stringify(data));
+    }
+  });
+
+  bot.on('login', () => {
+    console.log('[Net Status] Handshake accepted by server (Login Packet received).');
   });
 
   bot.on('spawn', () => {
-    console.log('>>> SUCCESS: Bot joined the Minecraft server in-game! <<<');
+    console.log('[Net Status] Entity spawned event triggered.');
 
-    // Auto-login attempt if server uses AuthMe/nLogin
     setTimeout(() => {
       bot.chat('/register KeepAlive123 KeepAlive123');
       bot.chat('/login KeepAlive123');
     }, 1000);
-
-    // Keep active with movement
-    setInterval(() => {
-      if (bot.entity) {
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.setControlState('jump', false), 500);
-      }
-    }, 15000);
   });
 
-  // Log incoming chat messages to see kick/disconnect reasons
   bot.on('message', (jsonMsg) => {
     console.log('[Server Chat]:', jsonMsg.toString());
   });
 
   bot.on('kicked', (reason) => {
-    console.log('[Server Kick Reason]:', reason);
+    console.log('[Server Kicked Event]:', reason);
   });
 
   bot.on('error', (err) => {
-    console.log('Mineflayer Error:', err.message);
+    console.log('[Mineflayer Error]:', err.message);
     
     if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code) && !useWebFallback) {
-      console.log(`Connection refused on port ${MC_PORT}. Switching to Web Ping fallback...`);
+      console.log(`[Fallback] Switch to Web Ping due to ${err.code}...`);
       useWebFallback = true;
       pingPowerupStackWeb();
       setInterval(pingPowerupStackWeb, 2 * 60 * 1000);
@@ -94,10 +96,10 @@ function createBot() {
   });
 
   bot.on('end', (reason) => {
-    console.log(`Disconnected (${reason}).`);
+    console.log(`[Net Status] Socket closed. Reason: ${reason}`);
     if (!useWebFallback) {
-      console.log('Reconnecting bot in 30 seconds...');
-      setTimeout(createBot, 30000);
+      console.log('[Reconnecting] Retrying in 20 seconds...');
+      setTimeout(createBot, 20000);
     }
   });
 }
