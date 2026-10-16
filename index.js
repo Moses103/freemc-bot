@@ -4,11 +4,12 @@ function createBot() {
   console.log('Connecting to Minecraft server...');
 
   const bot = mineflayer.createBot({
-    host: '15.235.182.152', // Subdomain host
-    port: 33838,                      // Your specific server port
-    username: 'KeepAlive',
-    auth: 'offline',                // Explicitly pin version to prevent autoVersion ETIMEDOUT crashes
-    checkTimeoutInterval: 60 * 1000   // Keepalive timeout threshold
+    // Reads host and port from Railway environment variables
+    host: process.env.MC_HOST || '15.235.182.152',
+    port: parseInt(process.env.MC_PORT) || 33838,
+    username: process.env.MC_USERNAME || 'KeepAlive',
+    auth: 'offline',                  // Disables Microsoft auth pinging
+    checkTimeoutInterval: 60 * 1000
   });
 
   bot.on('spawn', () => {
