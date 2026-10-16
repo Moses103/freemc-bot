@@ -1,7 +1,7 @@
 const mineflayer = require('mineflayer');
 const http = require('http');
 
-// 1. HTTP server binding for Railway health checks
+// 1. HTTP health check server for Railway
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -15,18 +15,18 @@ let jumpInterval = null;
 
 function createBot() {
   const host = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
-  const port = process.env.SERVER_PORT ? parseInt(process.env.SERVER_PORT, 10) : 33838;
+  const port = parseInt(process.env.SERVER_PORT, 10) || 33838;
   const username = process.env.BOT_USERNAME || 'KeepALive';
   const version = process.env.MC_VERSION || '1.21.11';
 
-  console.log(`[Bot] Connecting to ${host}:${port}...`);
+  console.log(`[Bot] Connecting directly to ${host}:${port}...`);
 
   const bot = mineflayer.createBot({
     host,
     port,
     username,
     version,
-    skipValidation: true, // Bypass DNS SRV lookup delays
+    skipValidation: true, // Forces Mineflayer to bypass SRV lookup and connect directly to 33838
     checkTimeoutInterval: 60 * 1000
   });
 
@@ -40,6 +40,7 @@ function createBot() {
     if (crouchInterval) clearInterval(crouchInterval);
     if (jumpInterval) clearInterval(jumpInterval);
 
+    // Crouch (sneak) every 10 seconds
     crouchInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('sneak', true);
@@ -50,6 +51,7 @@ function createBot() {
       }, 1000);
     }, 10000);
 
+    // Jump every 15 seconds
     jumpInterval = setInterval(() => {
       if (!bot.entity) return;
       bot.setControlState('jump', true);
