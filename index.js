@@ -1,37 +1,23 @@
-const mineflayer = require('mineflayer');
+const axios = require('axios');
 
-function createBot() {
-  console.log('Connecting to Minecraft server...');
+const PANEL_URL = process.env.PANEL_URL || 'https://panel.powerupstack.com';
+const API_KEY = process.env.POWERUPSTACK_API_KEY;
+const SERVER_ID = process.env.POWERUPSTACK_SERVER_ID;
 
-  const bot = mineflayer.createBot({
-    // Reads host and port from Railway environment variables
-    host: process.env.MC_HOST || '15.235.182.152',
-    port: parseInt(process.env.MC_PORT) || 33838,
-    username: process.env.MC_USERNAME || 'KeepAlive',
-    auth: 'offline',                  // Disables Microsoft auth pinging
-    checkTimeoutInterval: 60 * 1000
-  });
-
-  bot.on('spawn', () => {
-    console.log('Bot successfully connected! Keeping chunk loaded...');
-    
-    // Jump every 30 seconds to prevent AFK kick
-    setInterval(() => {
-      if (bot.entity) {
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.setControlState('jump', false), 500);
+async function keepServerAlive() {
+  try {
+    const response = await axios.get(`${PANEL_URL}/api/client/servers/${SERVER_ID}`, {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Accept': 'application/json'
       }
-    }, 30000);
-  });
-
-  bot.on('error', (err) => {
-    console.log('Bot encountered an error:', err.message);
-  });
-
-  bot.on('end', (reason) => {
-    console.log(`Disconnected from server (${reason}). Reconnecting in 15 seconds...`);
-    setTimeout(createBot, 15000);
-  });
+    });
+    console.log(`[${new Date().toLocaleTimeString()}] PowerupStack Status: ${response.data.attributes.current_state}`);
+  } catch (error) {
+    console.error('Failed to ping PowerupStack API:', error.response?.data || error.message);
+  }
 }
 
-createBot();
+// Ping panel every 3 minutes to keep instance awake
+setInterval(keepServerAlive, 3 * 60 * 1000);
+keepServerAlive();
