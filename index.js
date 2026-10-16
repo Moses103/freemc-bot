@@ -1,129 +1,33 @@
 const mineflayer = require('mineflayer');
-const https = require('https');
-
-const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
-const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
-const MC_VERSION = process.env.MC_VERSION || '1.21';
-
-const PANEL_DOMAIN = 'www.powerupstack.com';
-const INSTANCE_PATH = '/panel/instances/01a1424f-1513-78f6-894d-728833e3fdb5/console';
-
-let useWebFallback = false;
-
-function pingPowerupStackWeb() {
-  const options = {
-    hostname: PANEL_DOMAIN,
-    port: 443,
-    path: INSTANCE_PATH,
-    method: 'GET',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    }
-  };
-
-  const req = https.request(options, (res) => {
-    console.log(`[PowerupStack Web Ping] HTTP Status: ${res.statusCode}`);
-  });
-
-  req.on('error', (err) => {
-    console.error('[PowerupStack Web Ping Error]:', err.message);
-  });
-
-  req.end();
-}
-
-function sendAuth(bot) {
-  console.log('[Bot Auth] Sending /register and /login commands...');
-  bot.chat('/register KeepAlive123 KeepAlive123');
-  bot.chat('/login KeepAlive123');
-}
 
 function createBot() {
-  if (useWebFallback) {
-    pingPowerupStackWeb();
-    return;
-  }
-
-  console.log(`[Connect Attempt] Connecting Mineflayer to ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
-
   const bot = mineflayer.createBot({
-    host: MC_HOST,
-    port: MC_PORT,
-    username: process.env.MC_USERNAME || 'KeepAliveBot',
-    auth: 'offline',
-    version: MC_VERSION,
-    family: 4,
-    connectTimeout: 30000,
-    checkTimeoutInterval: 60 * 1000
-  });
-
-  bot._client.on('session', () => {
-    if (bot._client.deserializer) {
-      bot._client.deserializer.on('error', (err) => {});
-    }
-  });
-
-  bot._client.on('error', (err) => {
-    if (err.name === 'PartialReadError' || (err.message && err.message.includes('PartialReadError'))) {
-      return;
-    }
-    console.log('[Protocol Error]:', err.message);
-  });
-
-  bot._client.on('connect', () => {
-    console.log(`[Net Status] TCP socket connected to ${MC_HOST}:${MC_PORT}`);
+    host: 'stablesmp.playserver.pro',
+    port: 33838,
+    username: 'KeepAlive', // Change to your preferred bot name
+    version: '1.21.11'      // Matches your Paper server version
   });
 
   bot.on('login', () => {
-    console.log('[Net Status] Handshake accepted by Paper server.');
+    console.log(`[Bot] Connected to Paper 1.21.11 at stablesmp.playserver.pro as ${bot.username}`);
   });
 
   bot.on('spawn', () => {
-    console.log('>>> SUCCESS: Bot spawned (Queue/Limbo or Main World) <<<');
-    
-    // Attempt auth immediately upon spawn
-    setTimeout(() => sendAuth(bot), 2000);
-
-    // Keep active with periodic jumping
-    setInterval(() => {
-      if (bot.entity) {
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.setControlState('jump', false), 500);
-      }
-    }, 15000);
-  });
-
-  // Listen for chat prompts (like "/login" or world transfer messages) and re-trigger auth
-  bot.on('message', (jsonMsg) => {
-    const messageText = jsonMsg.toString();
-    console.log('[Server Chat]:', messageText);
-
-    if (messageText.includes('/register') || messageText.includes('/login') || messageText.includes('destination server')) {
-      setTimeout(() => sendAuth(bot), 1000);
-    }
+    console.log('[Bot] Spawned in the world!');
   });
 
   bot.on('kicked', (reason) => {
-    console.log('[Server Kick Reason]:', reason);
+    console.log('[Bot] Kicked from server:', reason);
   });
 
   bot.on('error', (err) => {
-    console.log('[Mineflayer Error]:', err.message);
-    if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code) && !useWebFallback) {
-      console.log(`[Fallback] Switching to Web Ping due to ${err.code}...`);
-      useWebFallback = true;
-      pingPowerupStackWeb();
-      setInterval(pingPowerupStackWeb, 2 * 60 * 1000);
-    }
+    console.error('[Bot] Error:', err);
   });
 
-  bot.on('end', (reason) => {
-    console.log(`[Net Status] Socket closed. Reason: ${reason}`);
-    if (!useWebFallback) {
-      console.log('[Reconnecting] Retrying in 15 seconds...');
-      setTimeout(createBot, 15000);
-    }
+  // Auto-reconnect if dropped
+  bot.on('end', () => {
+    console.log('[Bot] Disconnected. Reconnecting in 10 seconds...');
+    setTimeout(createBot, 10000);
   });
 }
 
