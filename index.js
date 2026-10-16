@@ -4,13 +4,14 @@ const https = require('https');
 // Primary Domain or IP fallback
 const MC_HOST = process.env.MC_HOST || 'stablesmp.playserver.pro';
 const MC_PORT = parseInt(process.env.MC_PORT) || 33838;
+// Explicitly specify version to bypass autoVersion ping (-1 error)
+const MC_VERSION = process.env.MC_VERSION || '1.21.11';
 
 // PowerupStack Web Panel Fallback Config
 const PANEL_DOMAIN = 'www.powerupstack.com';
 const INSTANCE_PATH = '/panel/instances/01a1424f-1513-78f6-894d-728833e3fdb5/console';
 
 let useWebFallback = false;
-let fallbackInterval = null;
 
 function pingPowerupStackWeb() {
   const options = {
@@ -41,18 +42,18 @@ function createBot() {
     return;
   }
 
-  console.log(`Connecting Mineflayer bot to ${MC_HOST}:${MC_PORT}...`);
+  console.log(`Connecting Mineflayer bot to ${MC_HOST}:${MC_PORT} (Version: ${MC_VERSION})...`);
 
   const bot = mineflayer.createBot({
     host: MC_HOST,
     port: MC_PORT,
     username: process.env.MC_USERNAME || 'KeepAliveBot',
     auth: 'offline',
-    family: 4, // Force IPv4
+    version: MC_VERSION, // Hardcoded version prevents auto-version handshake errors
+    family: 4,
     checkTimeoutInterval: 60 * 1000
   });
 
-  // Fires as soon as TCP socket connects
   bot._client.on('connect', () => {
     console.log('TCP Socket connected! Server port is OPEN.');
   });
@@ -60,7 +61,7 @@ function createBot() {
   bot.on('spawn', () => {
     console.log('>>> SUCCESS: Bot joined the Minecraft server in-game! <<<');
     
-    // Jump every 30s to stay active
+    // Jump every 30 seconds to maintain activity
     setInterval(() => {
       if (bot.entity) {
         bot.setControlState('jump', true);
@@ -72,13 +73,12 @@ function createBot() {
   bot.on('error', (err) => {
     console.log('Mineflayer Error:', err.message);
     
-    // Fall back to HTTP web ping if game port is closed/refused
     if (['ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'].includes(err.code) && !useWebFallback) {
-      console.log(`Connection refused on port ${MC_PORT}. PowerupStack server is offline or blocking socket connections.`);
-      console.log('Activating PowerupStack web ping fallback to wake/keep server alive...');
+      console.log(`Connection refused or lost on port ${MC_PORT}.`);
+      console.log('Activating PowerupStack web ping fallback...');
       useWebFallback = true;
       pingPowerupStackWeb();
-      fallbackInterval = setInterval(pingPowerupStackWeb, 2 * 60 * 1000);
+      setInterval(pingPowerupStackWeb, 2 * 60 * 1000);
     }
   });
 
