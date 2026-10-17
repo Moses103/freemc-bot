@@ -14,21 +14,26 @@ http.createServer((req, res) => {
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
 const username = process.env.BOT_USERNAME || 'KeepALive';
-const version = process.env.MC_VERSION || false;       // false = auto-detect
-const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
-const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
-const enableMovement = process.env.ENABLE_MOVEMENT === 'true'; // jump/sneak/walk once in the real world
+const version = process.env.MC_VERSION || false;          // false = auto-detect
+const auth = process.env.AUTH || 'offline';                // 'offline' or 'microsoft'
+const serverPassword = process.env.BOT_PASSWORD || '';     // only if server uses /login
+const enableMovement = process.env.MOVEMENT !== 'false';   // set MOVEMENT=false to disable
+const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '15000', 10); // wait before moving
+const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);           // stay near spawn
+const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10); // ms between actions
 
-let afkTimeout = null;
+let moveTimeout = null;
+let actionTimeout = null;
+let physicsTimeout = null;
 let reconnectTimeout = null;
 let reconnectDelay = 10000;
 
 function clearTimers() {
-  if (afkTimeout) clearTimeout(afkTimeout);
-  afkTimeout = null;
+  [moveTimeout, actionTimeout, physicsTimeout].forEach((t) => t && clearTimeout(t));
+  moveTimeout = actionTimeout = physicsTimeout = null;
 }
 
-function getRandomInt(min, max) {
+function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -46,47 +51,88 @@ async function resolveTarget() {
   return { host: domain, port: fallbackPort };
 }
 
-// Anti-AFK: safe actions by default, movement only if ENABLE_MOVEMENT=true
-function scheduleNextAfkAction(bot) {
-  if (!bot || !bot.entity) return;
+function stopMoving(bot) {
+  ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].forEach((c) => {
+    try { bot.setControlState(c, false); } catch (_) {}
+  });
+}
 
-  afkTimeout = setTimeout(() => {
+// True if the block ahead has a drop (2+ air blocks below) or liquid
+function isUnsafeAhead(bot) {
+  const pos = bot.entity.position;
+  const yaw = bot.entity.yaw;
+  const ahead = pos.offset(-Math.sin(yaw) * 1.2, 0, -Math.cos(yaw) * 1.2);
+  const below1 = bot.blockAt(ahead.offset(0, -1, 0));
+  const below2 = bot.blockAt(ahead.offset(0, -2, 0));
+  const feet = bot.blockAt(ahead);
+  const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
+  if (liquid(feet) || liquid(below1)) return true;
+  return below1 && below2 && below1.name === 'air' && below2.name === 'air';
+}
+
+// Movement loop: every tick pick a new heading and walk
+function movementLoop(bot, home) {
+  if (!bot.entity) return;
+
+  const pos = bot.entity.position;
+  const dist = Math.hypot(pos.x - home.x, pos.z - home.z);
+
+  let yaw;
+  if (dist > maxRadius) {
+    // Too far from spawn: face home and walk back
+    yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z));
+  } else {
+    yaw = Math.random() * Math.PI * 2 - Math.PI;
+  }
+
+  bot.look(yaw, 0, true).then(() => {
     if (!bot.entity) return;
+    stopMoving(bot);
 
-    const maxAction = enableMovement ? 5 : 2;
-    const actionType = getRandomInt(1, maxAction);
-
-    try {
-      switch (actionType) {
-        case 1:
-          bot.swingArm('right');
-          console.log('[Anti-AFK] Swung arm');
-          break;
-        case 2:
-          bot.setQuickBarSlot(getRandomInt(0, 8));
-          console.log('[Anti-AFK] Switched hotbar slot');
-          break;
-        case 3:
-          bot.setControlState('jump', true);
-          setTimeout(() => bot.entity && bot.setControlState('jump', false), 400);
-          console.log('[Anti-AFK] Jumped');
-          break;
-        case 4:
-          bot.setControlState('sneak', true);
-          setTimeout(() => bot.entity && bot.setControlState('sneak', false), 1000);
-          console.log('[Anti-AFK] Crouched');
-          break;
-        case 5:
-          bot.look(Math.random() * Math.PI * 2 - Math.PI, Math.random() * 0.6 - 0.3, true).catch(() => {});
-          console.log('[Anti-AFK] Looked around');
-          break;
-      }
-    } catch (err) {
-      console.log('[Anti-AFK] Action failed:', err.message);
+    if (isUnsafeAhead(bot)) {
+      console.log('[Move] Unsafe ahead, picking a new direction');
+      moveTimeout = setTimeout(() => movementLoop(bot, home), 300);
+      return;
     }
 
-    scheduleNextAfkAction(bot);
-  }, getRandomInt(500, 1000));
+    bot.setControlState('forward', true);
+    if (Math.random() < 0.4) bot.setControlState('sprint', true);
+    console.log(`[Move] Walking (${dist.toFixed(1)} blocks from spawn)`);
+
+    moveTimeout = setTimeout(() => movementLoop(bot, home), actionInterval);
+  }).catch(() => {
+    moveTimeout = setTimeout(() => movementLoop(bot, home), 1000);
+  });
+}
+
+// Random action every tick: jump, hotbar swap, arm swing, or short sneak
+function actionLoop(bot) {
+  if (!bot.entity) return;
+
+  actionTimeout = setTimeout(() => {
+    if (!bot.entity) return;
+    try {
+      const a = rand(1, 4);
+      if (a === 1) {
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.entity && bot.setControlState('jump', false), 400);
+        console.log('[Action] Jumped');
+      } else if (a === 2) {
+        bot.setQuickBarSlot(rand(0, 8));
+        console.log('[Action] Switched hotbar slot');
+      } else if (a === 3) {
+        bot.swingArm('right');
+        console.log('[Action] Swung arm');
+      } else {
+        bot.setControlState('sneak', true);
+        setTimeout(() => bot.entity && bot.setControlState('sneak', false), 800);
+        console.log('[Action] Crouched');
+      }
+    } catch (err) {
+      console.log('[Action] Failed:', err.message);
+    }
+    actionLoop(bot);
+  }, actionInterval);
 }
 
 async function createBot() {
@@ -95,7 +141,7 @@ async function createBot() {
 
   mc.ping({ host, port }, (err, res) => {
     if (err) return console.error('[Ping] Failed:', err.code || err.message);
-    console.log(`[Ping] Online. Version: ${res.version.name} (protocol ${res.version.protocol}), players: ${res.players.online}/${res.players.max}`);
+    console.log(`[Ping] Online. Version: ${res.version.name}, players: ${res.players.online}/${res.players.max}`);
   });
 
   const bot = mineflayer.createBot({
@@ -107,7 +153,7 @@ async function createBot() {
     checkTimeoutInterval: 60 * 1000
   });
 
-  // Keep physics off so the bot doesn't fall or send bad positions in a queue/limbo world
+  // Physics stays off until the bot is settled in a loaded world
   bot.physicsEnabled = false;
 
   bot._client.on('connect', () => console.log('[Bot] TCP connected'));
@@ -132,23 +178,26 @@ async function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned! Starting anti-AFK...');
+    console.log('[Bot] Spawned!');
     clearTimers();
 
-    // Only turn physics on if movement is enabled, and only after the world has had time to load
-    if (enableMovement) {
-      setTimeout(() => {
-        if (bot.entity) {
-          bot.physicsEnabled = true;
-          console.log('[Bot] Physics enabled');
-        }
-      }, 10000);
+    if (!enableMovement) {
+      actionLoop(bot);
+      return;
     }
 
-    scheduleNextAfkAction(bot);
+    console.log(`[Bot] Waiting ${physicsDelay / 1000}s before enabling movement...`);
+    physicsTimeout = setTimeout(() => {
+      if (!bot.entity) return;
+      const home = bot.entity.position.clone();
+      bot.physicsEnabled = true;
+      console.log(`[Bot] Movement enabled, home at ${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)}`);
+      movementLoop(bot, home);
+      actionLoop(bot);
+    }, physicsDelay);
   });
 
-  // Log queue/lobby messages to see where the bot actually is
+  // Log chat/queue messages
   bot.on('messagestr', (msg) => {
     if (msg.trim()) console.log('[Chat]', msg);
   });
