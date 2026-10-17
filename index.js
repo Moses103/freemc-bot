@@ -18,15 +18,18 @@ const version = process.env.MC_VERSION || false;       // false = auto-detect
 const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
 const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
 
-let crouchInterval = null;
-let jumpInterval = null;
+let afkTimeout = null;
 let reconnectTimeout = null;
 let reconnectDelay = 10000;
 
 function clearTimers() {
-  if (crouchInterval) clearInterval(crouchInterval);
-  if (jumpInterval) clearInterval(jumpInterval);
-  crouchInterval = jumpInterval = null;
+  if (afkTimeout) clearTimeout(afkTimeout);
+  afkTimeout = null;
+}
+
+// Utility function to pick a random integer between min and max (inclusive)
+function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 // Resolve the real connection target (SRV first, then plain domain)
@@ -48,6 +51,68 @@ async function resolveTarget() {
     console.log(`[DNS] A lookup failed: ${e.code}`);
   }
   return { host: domain, port: fallbackPort };
+}
+
+// Randomized Anti-AFK Engine
+function scheduleNextAfkAction(bot) {
+  if (!bot || !bot.entity) return;
+
+  // Schedule the next random action between 6 and 18 seconds
+  const nextDelay = getRandomInt(6000, 18000);
+
+  afkTimeout = setTimeout(() => {
+    if (!bot.entity) return;
+
+    const actionType = getRandomInt(1, 5);
+
+    switch (actionType) {
+      case 1: {
+        // Rotate head to a random direction
+        const yaw = (Math.random() * Math.PI * 2) - Math.PI; // -PI to PI
+        const pitch = (Math.random() * 0.8) - 0.4;          // Slight tilt up/down
+        bot.look(yaw, pitch, true);
+        console.log('[Anti-AFK] Looked around');
+        break;
+      }
+
+      case 2: {
+        // Jump briefly
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.entity && bot.setControlState('jump', false), getRandomInt(300, 600));
+        console.log('[Anti-AFK] Jumped');
+        break;
+      }
+
+      case 3: {
+        // Sneak briefly
+        bot.setControlState('sneak', true);
+        setTimeout(() => bot.entity && bot.setControlState('sneak', false), getRandomInt(800, 2000));
+        console.log('[Anti-AFK] Crouched');
+        break;
+      }
+
+      case 4: {
+        // Walk forward or backward for a short burst
+        const direction = Math.random() > 0.5 ? 'forward' : 'back';
+        bot.setControlState(direction, true);
+        setTimeout(() => {
+          if (bot.entity) bot.setControlState(direction, false);
+        }, getRandomInt(400, 1200));
+        console.log(`[Anti-AFK] Moved ${direction}`);
+        break;
+      }
+
+      case 5: {
+        // Swing main hand (arm animation)
+        bot.swingArm('right');
+        console.log('[Anti-AFK] Swung arm');
+        break;
+      }
+    }
+
+    // Loop continuously while connected
+    scheduleNextAfkAction(bot);
+  }, nextDelay);
 }
 
 async function createBot() {
@@ -90,20 +155,9 @@ async function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned! Starting anti-AFK timers...');
+    console.log('[Bot] Spawned! Starting unpredictable anti-AFK engine...');
     clearTimers();
-
-    crouchInterval = setInterval(() => {
-      if (!bot.entity) return;
-      bot.setControlState('sneak', true);
-      setTimeout(() => bot.entity && bot.setControlState('sneak', false), 1000);
-    }, 10000);
-
-    jumpInterval = setInterval(() => {
-      if (!bot.entity) return;
-      bot.setControlState('jump', true);
-      setTimeout(() => bot.entity && bot.setControlState('jump', false), 500);
-    }, 15000);
+    scheduleNextAfkAction(bot);
   });
 
   bot.on('kicked', (reason) => console.log('[Bot] Kicked:', JSON.stringify(reason)));
