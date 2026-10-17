@@ -56,7 +56,7 @@ function scheduleNextAfkAction(bot) {
   if (!bot || !bot.entity) return;
 
   // Schedule the next action between 5 and 15 seconds
-  const nextDelay = getRandomInt(5000, 15000);
+  const nextDelay = getRandomInt(500, 1000);
 
   afkTimeout = setTimeout(async () => {
     if (!bot.entity) return;
