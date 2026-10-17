@@ -20,7 +20,7 @@ const serverPassword = process.env.BOT_PASSWORD || '';     // only if server use
 const enableMovement = process.env.MOVEMENT !== 'true';   // set MOVEMENT=false to disable
 const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '3000', 10); // wait before moving
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);           // stay near spawn
-const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10); // ms between actions
+const actionInterval = parseInt(process.env.ACTION_INTERVAL || '1000', 10); // ms between actions
 
 let moveTimeout = null;
 let actionTimeout = null;
