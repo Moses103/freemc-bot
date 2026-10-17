@@ -17,6 +17,7 @@ const username = process.env.BOT_USERNAME || 'KeepALive';
 const version = process.env.MC_VERSION || false;       // false = auto-detect
 const auth = process.env.AUTH || 'offline';             // 'offline' or 'microsoft'
 const serverPassword = process.env.BOT_PASSWORD || '';  // only if server uses /login
+const enableMovement = process.env.ENABLE_MOVEMENT === 'true'; // jump/sneak/walk once in the real world
 
 let afkTimeout = null;
 let reconnectTimeout = null;
@@ -42,123 +43,50 @@ async function resolveTarget() {
   } catch (e) {
     console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
   }
-  try {
-    const addrs = await dns.resolve4(domain);
-    console.log(`[DNS] ${domain} -> ${addrs.join(', ')}`);
-  } catch (e) {
-    console.log(`[DNS] A lookup failed: ${e.code}`);
-  }
   return { host: domain, port: fallbackPort };
 }
 
-// Expanded Anti-AFK Engine with Hit, Use Item, and Mine capabilities
+// Anti-AFK: safe actions by default, movement only if ENABLE_MOVEMENT=true
 function scheduleNextAfkAction(bot) {
   if (!bot || !bot.entity) return;
 
-  // Schedule the next action between 5 and 15 seconds
-  const nextDelay = getRandomInt(500, 1000);
-
-  afkTimeout = setTimeout(async () => {
+  afkTimeout = setTimeout(() => {
     if (!bot.entity) return;
 
-    const actionType = getRandomInt(1, 8);
+    const maxAction = enableMovement ? 5 : 2;
+    const actionType = getRandomInt(1, maxAction);
 
-    switch (actionType) {
-      case 1: {
-        // Look around in a random direction
-        const yaw = (Math.random() * Math.PI * 2) - Math.PI;
-        const pitch = (Math.random() * 0.8) - 0.4;
-        await bot.look(yaw, pitch, true).catch(() => {});
-        console.log('[Anti-AFK] Looked around');
-        break;
-      }
-
-      case 2: {
-        // Jump briefly
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.entity && bot.setControlState('jump', false), getRandomInt(300, 600));
-        console.log('[Anti-AFK] Jumped');
-        break;
-      }
-
-      case 3: {
-        // Crouch briefly
-        bot.setControlState('sneak', true);
-        setTimeout(() => bot.entity && bot.setControlState('sneak', false), getRandomInt(800, 2000));
-        console.log('[Anti-AFK] Crouched');
-        break;
-      }
-
-      case 4: {
-        // Move in a short burst
-        const direction = Math.random() > 0.5 ? 'forward' : 'back';
-        bot.setControlState(direction, true);
-        setTimeout(() => {
-          if (bot.entity) bot.setControlState(direction, false);
-        }, getRandomInt(400, 1000));
-        console.log(`[Anti-AFK] Moved ${direction}`);
-        break;
-      }
-
-      case 5: {
-        // Swing arm / Hit attack
-        // If an entity is nearby, hit it; otherwise swing arm into the air
-        const filter = (e) => e.type === 'mob' || e.type === 'player';
-        const target = bot.nearestEntity(filter);
-        if (target && bot.entity.position.distanceTo(target.position) < 3.5) {
-          bot.attack(target);
-          console.log(`[Anti-AFK] Attacked entity (${target.name || target.username})`);
-        } else {
+    try {
+      switch (actionType) {
+        case 1:
           bot.swingArm('right');
-          console.log('[Anti-AFK] Swung arm / Hit air');
-        }
-        break;
+          console.log('[Anti-AFK] Swung arm');
+          break;
+        case 2:
+          bot.setQuickBarSlot(getRandomInt(0, 8));
+          console.log('[Anti-AFK] Switched hotbar slot');
+          break;
+        case 3:
+          bot.setControlState('jump', true);
+          setTimeout(() => bot.entity && bot.setControlState('jump', false), 400);
+          console.log('[Anti-AFK] Jumped');
+          break;
+        case 4:
+          bot.setControlState('sneak', true);
+          setTimeout(() => bot.entity && bot.setControlState('sneak', false), 1000);
+          console.log('[Anti-AFK] Crouched');
+          break;
+        case 5:
+          bot.look(Math.random() * Math.PI * 2 - Math.PI, Math.random() * 0.6 - 0.3, true).catch(() => {});
+          console.log('[Anti-AFK] Looked around');
+          break;
       }
-
-      case 6: {
-        // Use / Right-click held item (e.g. food, shield, bow, or tool)
-        try {
-          bot.activateItem();
-          console.log('[Anti-AFK] Used held item');
-          setTimeout(() => {
-            if (bot.entity) bot.deactivateItem();
-          }, 1000);
-        } catch (err) {
-          bot.swingArm('right');
-        }
-        break;
-      }
-
-      case 7: {
-        // Mine a block in front of or below the bot
-        const blockInFront = bot.blockAt(bot.entity.position.offset(0, 0, 1)) || bot.blockAt(bot.entity.position.offset(0, -1, 0));
-        
-        if (blockInFront && blockInFront.name !== 'air' && blockInFront.name !== 'bedrock') {
-          try {
-            console.log(`[Anti-AFK] Mining block: ${blockInFront.name}`);
-            await bot.dig(blockInFront, 'ignore');
-          } catch (err) {
-            console.log('[Anti-AFK] Mining attempt interrupted or not breakable');
-          }
-        } else {
-          bot.swingArm('right');
-          console.log('[Anti-AFK] Punched block in range');
-        }
-        break;
-      }
-
-      case 8: {
-        // Switch main hand hotbar slot randomly (0 to 8)
-        const randomSlot = getRandomInt(0, 8);
-        bot.setQuickBarSlot(randomSlot);
-        console.log(`[Anti-AFK] Switched hotbar to slot ${randomSlot}`);
-        break;
-      }
+    } catch (err) {
+      console.log('[Anti-AFK] Action failed:', err.message);
     }
 
-    // Schedule next iteration
     scheduleNextAfkAction(bot);
-  }, nextDelay);
+  }, getRandomInt(500, 1000));
 }
 
 async function createBot() {
@@ -178,6 +106,9 @@ async function createBot() {
     auth,
     checkTimeoutInterval: 60 * 1000
   });
+
+  // Keep physics off so the bot doesn't fall or send bad positions in a queue/limbo world
+  bot.physicsEnabled = false;
 
   bot._client.on('connect', () => console.log('[Bot] TCP connected'));
 
@@ -201,9 +132,25 @@ async function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned! Starting advanced anti-AFK engine...');
+    console.log('[Bot] Spawned! Starting anti-AFK...');
     clearTimers();
+
+    // Only turn physics on if movement is enabled, and only after the world has had time to load
+    if (enableMovement) {
+      setTimeout(() => {
+        if (bot.entity) {
+          bot.physicsEnabled = true;
+          console.log('[Bot] Physics enabled');
+        }
+      }, 10000);
+    }
+
     scheduleNextAfkAction(bot);
+  });
+
+  // Log queue/lobby messages to see where the bot actually is
+  bot.on('messagestr', (msg) => {
+    if (msg.trim()) console.log('[Chat]', msg);
   });
 
   bot.on('kicked', (reason) => console.log('[Bot] Kicked:', JSON.stringify(reason)));
