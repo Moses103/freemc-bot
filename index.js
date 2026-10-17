@@ -18,7 +18,7 @@ const version = process.env.MC_VERSION || false;          // false = auto-detect
 const auth = process.env.AUTH || 'offline';                // 'offline' or 'microsoft'
 const serverPassword = process.env.BOT_PASSWORD || '';     // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';   // set MOVEMENT=false to disable
-const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '15000', 10); // wait before moving
+const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '3000', 10); // wait before moving
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);           // stay near spawn
 const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10); // ms between actions
 
