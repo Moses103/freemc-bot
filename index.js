@@ -27,12 +27,10 @@ function clearTimers() {
   afkTimeout = null;
 }
 
-// Utility function to pick a random integer between min and max (inclusive)
 function getRandomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Resolve the real connection target (SRV first, then plain domain)
 async function resolveTarget() {
   try {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
@@ -53,24 +51,24 @@ async function resolveTarget() {
   return { host: domain, port: fallbackPort };
 }
 
-// Randomized Anti-AFK Engine
+// Expanded Anti-AFK Engine with Hit, Use Item, and Mine capabilities
 function scheduleNextAfkAction(bot) {
   if (!bot || !bot.entity) return;
 
-  // Schedule the next random action between 6 and 18 seconds
-  const nextDelay = getRandomInt(6000, 18000);
+  // Schedule the next action between 5 and 15 seconds
+  const nextDelay = getRandomInt(5000, 15000);
 
-  afkTimeout = setTimeout(() => {
+  afkTimeout = setTimeout(async () => {
     if (!bot.entity) return;
 
-    const actionType = getRandomInt(1, 5);
+    const actionType = getRandomInt(1, 8);
 
     switch (actionType) {
       case 1: {
-        // Rotate head to a random direction
-        const yaw = (Math.random() * Math.PI * 2) - Math.PI; // -PI to PI
-        const pitch = (Math.random() * 0.8) - 0.4;          // Slight tilt up/down
-        bot.look(yaw, pitch, true);
+        // Look around in a random direction
+        const yaw = (Math.random() * Math.PI * 2) - Math.PI;
+        const pitch = (Math.random() * 0.8) - 0.4;
+        await bot.look(yaw, pitch, true).catch(() => {});
         console.log('[Anti-AFK] Looked around');
         break;
       }
@@ -84,7 +82,7 @@ function scheduleNextAfkAction(bot) {
       }
 
       case 3: {
-        // Sneak briefly
+        // Crouch briefly
         bot.setControlState('sneak', true);
         setTimeout(() => bot.entity && bot.setControlState('sneak', false), getRandomInt(800, 2000));
         console.log('[Anti-AFK] Crouched');
@@ -92,25 +90,73 @@ function scheduleNextAfkAction(bot) {
       }
 
       case 4: {
-        // Walk forward or backward for a short burst
+        // Move in a short burst
         const direction = Math.random() > 0.5 ? 'forward' : 'back';
         bot.setControlState(direction, true);
         setTimeout(() => {
           if (bot.entity) bot.setControlState(direction, false);
-        }, getRandomInt(400, 1200));
+        }, getRandomInt(400, 1000));
         console.log(`[Anti-AFK] Moved ${direction}`);
         break;
       }
 
       case 5: {
-        // Swing main hand (arm animation)
-        bot.swingArm('right');
-        console.log('[Anti-AFK] Swung arm');
+        // Swing arm / Hit attack
+        // If an entity is nearby, hit it; otherwise swing arm into the air
+        const filter = (e) => e.type === 'mob' || e.type === 'player';
+        const target = bot.nearestEntity(filter);
+        if (target && bot.entity.position.distanceTo(target.position) < 3.5) {
+          bot.attack(target);
+          console.log(`[Anti-AFK] Attacked entity (${target.name || target.username})`);
+        } else {
+          bot.swingArm('right');
+          console.log('[Anti-AFK] Swung arm / Hit air');
+        }
+        break;
+      }
+
+      case 6: {
+        // Use / Right-click held item (e.g. food, shield, bow, or tool)
+        try {
+          bot.activateItem();
+          console.log('[Anti-AFK] Used held item');
+          setTimeout(() => {
+            if (bot.entity) bot.deactivateItem();
+          }, 1000);
+        } catch (err) {
+          bot.swingArm('right');
+        }
+        break;
+      }
+
+      case 7: {
+        // Mine a block in front of or below the bot
+        const blockInFront = bot.blockAt(bot.entity.position.offset(0, 0, 1)) || bot.blockAt(bot.entity.position.offset(0, -1, 0));
+        
+        if (blockInFront && blockInFront.name !== 'air' && blockInFront.name !== 'bedrock') {
+          try {
+            console.log(`[Anti-AFK] Mining block: ${blockInFront.name}`);
+            await bot.dig(blockInFront, 'ignore');
+          } catch (err) {
+            console.log('[Anti-AFK] Mining attempt interrupted or not breakable');
+          }
+        } else {
+          bot.swingArm('right');
+          console.log('[Anti-AFK] Punched block in range');
+        }
+        break;
+      }
+
+      case 8: {
+        // Switch main hand hotbar slot randomly (0 to 8)
+        const randomSlot = getRandomInt(0, 8);
+        bot.setQuickBarSlot(randomSlot);
+        console.log(`[Anti-AFK] Switched hotbar to slot ${randomSlot}`);
         break;
       }
     }
 
-    // Loop continuously while connected
+    // Schedule next iteration
     scheduleNextAfkAction(bot);
   }, nextDelay);
 }
@@ -155,7 +201,7 @@ async function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned! Starting unpredictable anti-AFK engine...');
+    console.log('[Bot] Spawned! Starting advanced anti-AFK engine...');
     clearTimers();
     scheduleNextAfkAction(bot);
   });
