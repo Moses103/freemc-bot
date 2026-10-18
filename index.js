@@ -10,17 +10,6 @@ http.createServer((req, res) => {
   res.end('Minecraft Bots are operational.\n');
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
-(async () => {
-  https.get('https://api.ipify.org', (res) => {
-    let ip = '';
-    res.on('data', (d) => (ip += d));
-    res.on('end', () => console.log('[Diag] Railway outbound IP:', ip));
-  }).on('error', () => {});
-  console.log('[Diag] A records:', await dns.resolve4(domain).catch((e) => e.code));
-  console.log('[Diag] SRV:', JSON.stringify(await dns.resolveSrv(`_minecraft._tcp.${domain}`).catch((e) => e.code)));
-  for (const p of [33838, 25565]) console.log(`[Diag] TCP ${domain}:${p} ->`, await tcpTest(domain, p));
-})();
-
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
