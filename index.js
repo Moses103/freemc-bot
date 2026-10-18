@@ -25,13 +25,17 @@ const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10);
 const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
 const pauseFor = parseInt(process.env.PAUSE_FOR || String(5 * 60 * 1000), 10);      // 5 minutes
 
+// Waiting for the server to start
+const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
+const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10); // ping every 30s while waiting
+const readyDelay = parseInt(process.env.READY_DELAY || '15000', 10);       // extra wait after it's ready
+
 const HOUR = 3600 * 1000;
 const WINDOW_MS = 6 * HOUR;                 // each bot is online 6h per day
 const MARGIN_MS = 5 * 60 * 1000;            // join 5 min early / leave 5 min late for overlap
 const MAX_GAP_H = 5.5;                      // max gap between window starts (guarantees coverage)
 
 // ---------------- Daily schedule (UTC) ----------------
-// Deterministic per-day random generator, so a Railway restart rebuilds the same schedule
 function hashStr(s) {
   let h = 1779033703 ^ s.length;
   for (let i = 0; i < s.length; i++) {
@@ -51,22 +55,18 @@ function mulberry32(a) {
 
 const scheduleCache = new Map();
 
-// Windows for one UTC day. First window starts at 00:00, last ends at 24:00,
-// and the gaps between starts are <= 5.5h, so with 6h windows there is always overlap.
 function getDaySchedule(dayStartMs) {
   const key = new Date(dayStartMs).toISOString().slice(0, 10);
   if (scheduleCache.has(key)) return scheduleCache.get(key);
 
   const rng = mulberry32(hashStr(key));
 
-  // shuffle which bot gets which slot today
   const names = [...BOT_NAMES];
   for (let i = names.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     [names[i], names[j]] = [names[j], names[i]];
   }
 
-  // pick random start hours; the first is 0 and the last is 24-6=18
   const n = names.length;
   const lastStart = 24 - 6;
   let starts;
@@ -82,7 +82,6 @@ function getDaySchedule(dayStartMs) {
     starts = null;
   }
   if (!starts) {
-    // fallback: evenly spaced
     starts = names.map((_, i) => (lastStart / (n - 1)) * i);
   }
 
@@ -103,7 +102,6 @@ function utcDayStart(ms) {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
-// Which bots should be online right now
 function wantedNow() {
   const now = Date.now();
   const today = utcDayStart(now);
@@ -121,6 +119,8 @@ function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function resolveTarget() {
   try {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
@@ -130,6 +130,60 @@ async function resolveTarget() {
     }
   } catch (e) { /* no SRV, use fallback */ }
   return { host: domain, port: fallbackPort };
+}
+
+// ---------------- Server status check ----------------
+let serverReady = false; // last known state, used by the scheduler
+
+function pingServer(host, port) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ready: false, text: 'ping timeout' }), 10000);
+    mc.ping({ host, port }, (err, res) => {
+      clearTimeout(timer);
+      if (err || !res) return resolve({ ready: false, text: `unreachable (${err ? err.code || err.message : 'no response'})` });
+
+      const raw = (res.version && res.version.name) || '';
+      const text = raw.replace(/§./g, '').trim() || 'no status';
+      const protocol = res.version ? res.version.protocol : -1;
+      // Placeholder statuses (Sleeping, Queued, Starting...) use protocol -1
+      const placeholder = protocol <= 0 || /sleep|queue|start|offline|stopp|wait|load|hibern/i.test(text);
+      resolve({ ready: !placeholder, text: `${text} (protocol ${protocol}, players ${res.players.online}/${res.players.max})` });
+    });
+  });
+}
+
+// Blocks until the real server is up; returns the target to connect to
+async function waitForServer(r) {
+  let lastText = null;
+  let lastLog = 0;
+
+  while (!r.stopped) {
+    const { host, port } = await resolveTarget();
+    if (!waitForServerOn) return { host, port };
+
+    const status = await pingServer(host, port);
+    serverReady = status.ready;
+
+    if (status.ready) {
+      if (lastText !== null) console.log(`[${r.name}] Server is up (${status.text}). Joining in ${readyDelay / 1000}s...`);
+      await sleep(readyDelay);
+      if (r.stopped) return null;
+      // Re-check once more so we don't join right as it goes back to sleep
+      const again = await pingServer(host, port);
+      serverReady = again.ready;
+      if (again.ready) return { host, port };
+      continue;
+    }
+
+    // Log when the status changes, or every 5 minutes
+    if (status.text !== lastText || Date.now() - lastLog > 5 * 60 * 1000) {
+      console.log(`[${r.name}] Waiting for server... status: ${status.text}`);
+      lastText = status.text;
+      lastLog = Date.now();
+    }
+    await sleep(checkInterval);
+  }
+  return null;
 }
 
 function stopMoving(bot) {
@@ -155,7 +209,7 @@ const runners = new Map(); // name -> runner state
 let emergencyName = null;
 
 function clearActivity(r) {
-  ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout'].forEach((k) => {
+  ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout', 'stableTimeout'].forEach((k) => {
     if (r[k]) { clearTimeout(r[k]); r[k] = null; }
   });
   if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
@@ -235,14 +289,11 @@ function pauseActivity(r, bot, home) {
 async function connectRunner(r) {
   if (r.stopped) return;
 
-  const { host, port } = await resolveTarget();
-  if (r.stopped) return;
+  // Wait here until the real server is online
+  const target = await waitForServer(r);
+  if (!target || r.stopped) return;
+  const { host, port } = target;
   console.log(`[${r.name}] Connecting to ${host}:${port}...`);
-
-  mc.ping({ host, port }, (err, res) => {
-    if (err) return console.error(`[${r.name}] Ping failed:`, err.code || err.message);
-    console.log(`[${r.name}] Ping OK: ${res.version.name}, players ${res.players.online}/${res.players.max}`);
-  });
 
   const bot = mineflayer.createBot({
     host,
@@ -264,7 +315,6 @@ async function connectRunner(r) {
   bot.once('login', () => {
     clearTimeout(watchdog);
     r.loggedIn = true;
-    r.reconnectDelay = 10000;
     console.log(`[${r.name}] Logged in`);
   });
 
@@ -279,6 +329,9 @@ async function connectRunner(r) {
   bot.once('spawn', () => {
     console.log(`[${r.name}] Spawned`);
     clearActivity(r);
+
+    // Only reset the reconnect backoff if the bot stays connected for a minute
+    r.stableTimeout = setTimeout(() => { r.reconnectDelay = 10000; }, 60000);
 
     const begin = (home) => {
       startActivity(r, bot, home);
@@ -307,6 +360,7 @@ async function connectRunner(r) {
       console.log(`[${r.name}] Disconnected (window over)`);
       return;
     }
+    // After a disconnect, connectRunner waits for the server again before rejoining
     console.log(`[${r.name}] Disconnected (${reason}). Reconnecting in ${r.reconnectDelay / 1000}s...`);
     r.reconnectTimeout = setTimeout(() => connectRunner(r), r.reconnectDelay);
     r.reconnectDelay = Math.min(r.reconnectDelay * 2, 120000);
@@ -319,7 +373,7 @@ function startRunner(name) {
   const r = {
     name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
-    resumeTimeout: null, pauseInterval: null, reconnectTimeout: null
+    resumeTimeout: null, pauseInterval: null, reconnectTimeout: null, stableTimeout: null
   };
   runners.set(name, r);
   connectRunner(r);
@@ -345,8 +399,9 @@ function tick() {
   const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
   const scheduledOnline = loggedIn.some((n) => wanted.has(n));
 
-  // Safety net: if nobody is online for 2+ minutes, bring in an extra bot
-  if (loggedIn.length === 0) {
+  // Safety net: if the server is up but nobody is online for 2+ minutes, add a backup bot.
+  // Skipped while the server itself is down, since a backup couldn't join anyway.
+  if (loggedIn.length === 0 && serverReady) {
     if (!noneOnlineSince) noneOnlineSince = Date.now();
     if (!emergencyName && Date.now() - noneOnlineSince > 120000) {
       const spare = BOT_NAMES.filter((n) => !wanted.has(n));
