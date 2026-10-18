@@ -10,6 +10,30 @@ http.createServer((req, res) => {
   res.end('Minecraft Bots are operational.\n');
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
+const net = require('net');
+const https = require('https');
+
+function tcpTest(host, port) {
+  return new Promise((resolve) => {
+    const s = net.connect({ host, port });
+    s.setTimeout(8000);
+    s.on('connect', () => { s.destroy(); resolve('OPEN'); });
+    s.on('timeout', () => { s.destroy(); resolve('TIMEOUT'); });
+    s.on('error', (e) => resolve(e.code || e.message));
+  });
+}
+
+(async () => {
+  https.get('https://api.ipify.org', (res) => {
+    let ip = '';
+    res.on('data', (d) => (ip += d));
+    res.on('end', () => console.log('[Diag] Railway outbound IP:', ip));
+  }).on('error', () => {});
+  console.log('[Diag] A records:', await dns.resolve4(domain).catch((e) => e.code));
+  console.log('[Diag] SRV:', JSON.stringify(await dns.resolveSrv(`_minecraft._tcp.${domain}`).catch((e) => e.code)));
+  for (const p of [33838, 25565]) console.log(`[Diag] TCP ${domain}:${p} ->`, await tcpTest(domain, p));
+})();
+
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
