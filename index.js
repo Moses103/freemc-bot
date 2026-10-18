@@ -216,7 +216,7 @@ let serverReady = false; // last known state, used by the scheduler
 
 function pingServer(host, port) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ready: false, text: 'ping timeout' }), 10000);
+    const timer = setTimeout(() => resolve({ ready: false, text: 'ping timeout' }), pingTimeout);
     mc.ping({ host, port }, (err, res) => {
       clearTimeout(timer);
       if (err || !res) return resolve({ ready: false, text: `unreachable (${err ? err.code || err.message : 'no response'})` });
