@@ -34,7 +34,9 @@ const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10
 const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
 const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
 const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
-const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '3', 10); // join anyway after this many timeouts in a row
+const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '1', 10); // join anyway after this many timeouts in a row
+const loginTimeout = parseInt(process.env.LOGIN_TIMEOUT || '120000', 10); // how long to wait for a login (queue/startup can be slow)
+const pingTimeout = parseInt(process.env.PING_TIMEOUT || '20000', 10);
 
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                         // each bot is online 6h per day
