@@ -7,32 +7,116 @@ const http = require('http');
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Minecraft Bot is operational.\n');
+  res.end('Minecraft Bots are operational.\n');
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
-// Config
+// ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const username = process.env.BOT_USERNAME || 'KeepALive';
+const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 const version = process.env.MC_VERSION || false;          // false = auto-detect
-const auth = process.env.AUTH || 'offline';                // 'offline' or 'microsoft'
-const serverPassword = process.env.BOT_PASSWORD || '';     // only if server uses /login
-const enableMovement = process.env.MOVEMENT !== 'false';   // set MOVEMENT=false to disable
-const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '3000', 10); // wait before moving
-const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);           // stay near spawn
-const actionInterval = parseInt(process.env.ACTION_INTERVAL || '1000', 10); // ms between actions
+const auth = process.env.AUTH || 'offline';
+const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
+const enableMovement = process.env.MOVEMENT !== 'false';
+const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '15000', 10);
+const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
+const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10);
+const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
+const pauseFor = parseInt(process.env.PAUSE_FOR || String(5 * 60 * 1000), 10);      // 5 minutes
 
-let moveTimeout = null;
-let actionTimeout = null;
-let physicsTimeout = null;
-let reconnectTimeout = null;
-let reconnectDelay = 10000;
+const HOUR = 3600 * 1000;
+const WINDOW_MS = 6 * HOUR;                 // each bot is online 6h per day
+const MARGIN_MS = 5 * 60 * 1000;            // join 5 min early / leave 5 min late for overlap
+const MAX_GAP_H = 5.5;                      // max gap between window starts (guarantees coverage)
 
-function clearTimers() {
-  [moveTimeout, actionTimeout, physicsTimeout].forEach((t) => t && clearTimeout(t));
-  moveTimeout = actionTimeout = physicsTimeout = null;
+// ---------------- Daily schedule (UTC) ----------------
+// Deterministic per-day random generator, so a Railway restart rebuilds the same schedule
+function hashStr(s) {
+  let h = 1779033703 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
+const scheduleCache = new Map();
+
+// Windows for one UTC day. First window starts at 00:00, last ends at 24:00,
+// and the gaps between starts are <= 5.5h, so with 6h windows there is always overlap.
+function getDaySchedule(dayStartMs) {
+  const key = new Date(dayStartMs).toISOString().slice(0, 10);
+  if (scheduleCache.has(key)) return scheduleCache.get(key);
+
+  const rng = mulberry32(hashStr(key));
+
+  // shuffle which bot gets which slot today
+  const names = [...BOT_NAMES];
+  for (let i = names.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [names[i], names[j]] = [names[j], names[i]];
+  }
+
+  // pick random start hours; the first is 0 and the last is 24-6=18
+  const n = names.length;
+  const lastStart = 24 - 6;
+  let starts;
+  for (let attempt = 0; attempt < 10000; attempt++) {
+    const mids = [];
+    for (let i = 0; i < n - 2; i++) mids.push(rng() * lastStart);
+    starts = [0, ...mids.sort((a, b) => a - b), lastStart];
+    let ok = true;
+    for (let i = 1; i < starts.length; i++) {
+      if (starts[i] - starts[i - 1] > MAX_GAP_H) { ok = false; break; }
+    }
+    if (ok) break;
+    starts = null;
+  }
+  if (!starts) {
+    // fallback: evenly spaced
+    starts = names.map((_, i) => (lastStart / (n - 1)) * i);
+  }
+
+  const windows = names.map((name, i) => ({
+    name,
+    start: dayStartMs + starts[i] * HOUR,
+    end: dayStartMs + starts[i] * HOUR + WINDOW_MS
+  }));
+  scheduleCache.set(key, windows);
+
+  const fmt = (ms) => new Date(ms).toISOString().slice(11, 16);
+  console.log(`[Schedule] ${key} (UTC): ` + windows.map((w) => `${w.name} ${fmt(w.start)}-${fmt(w.end)}`).join(' | '));
+  return windows;
+}
+
+function utcDayStart(ms) {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+// Which bots should be online right now
+function wantedNow() {
+  const now = Date.now();
+  const today = utcDayStart(now);
+  const wanted = new Set();
+  for (const dayStart of [today - 24 * HOUR, today, today + 24 * HOUR]) {
+    for (const w of getDaySchedule(dayStart)) {
+      if (now >= w.start - MARGIN_MS && now <= w.end + MARGIN_MS) wanted.add(w.name);
+    }
+  }
+  return wanted;
+}
+
+// ---------------- Helpers ----------------
 function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -42,12 +126,9 @@ async function resolveTarget() {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
     if (records.length) {
       const r = records.sort((a, b) => a.priority - b.priority)[0];
-      console.log(`[DNS] SRV found: ${r.name}:${r.port}`);
       return { host: r.name, port: r.port };
     }
-  } catch (e) {
-    console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
-  }
+  } catch (e) { /* no SRV, use fallback */ }
   return { host: domain, port: fallbackPort };
 }
 
@@ -57,7 +138,6 @@ function stopMoving(bot) {
   });
 }
 
-// True if the block ahead has a drop (2+ air blocks below) or liquid
 function isUnsafeAhead(bot) {
   const pos = bot.entity.position;
   const yaw = bot.entity.yaw;
@@ -70,103 +150,122 @@ function isUnsafeAhead(bot) {
   return below1 && below2 && below1.name === 'air' && below2.name === 'air';
 }
 
-// Movement loop: every tick pick a new heading and walk
-function movementLoop(bot, home) {
-  if (!bot.entity) return;
+// ---------------- Per-bot runner ----------------
+const runners = new Map(); // name -> runner state
+let emergencyName = null;
+
+function clearActivity(r) {
+  ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout'].forEach((k) => {
+    if (r[k]) { clearTimeout(r[k]); r[k] = null; }
+  });
+  if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
+}
+
+function movementLoop(r, bot, home) {
+  if (r.bot !== bot || !bot.entity) return;
 
   const pos = bot.entity.position;
   const dist = Math.hypot(pos.x - home.x, pos.z - home.z);
-
-  let yaw;
-  if (dist > maxRadius) {
-    // Too far from spawn: face home and walk back
-    yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z));
-  } else {
-    yaw = Math.random() * Math.PI * 2 - Math.PI;
-  }
+  const yaw = dist > maxRadius
+    ? Math.atan2(-(home.x - pos.x), -(home.z - pos.z))
+    : Math.random() * Math.PI * 2 - Math.PI;
 
   bot.look(yaw, 0, true).then(() => {
-    if (!bot.entity) return;
+    if (r.bot !== bot || !bot.entity) return;
     stopMoving(bot);
 
     if (isUnsafeAhead(bot)) {
-      console.log('[Move] Unsafe ahead, picking a new direction');
-      moveTimeout = setTimeout(() => movementLoop(bot, home), 300);
+      r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 300);
       return;
     }
 
     bot.setControlState('forward', true);
     if (Math.random() < 0.4) bot.setControlState('sprint', true);
-    console.log(`[Move] Walking (${dist.toFixed(1)} blocks from spawn)`);
-
-    moveTimeout = setTimeout(() => movementLoop(bot, home), actionInterval);
+    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), actionInterval);
   }).catch(() => {
-    moveTimeout = setTimeout(() => movementLoop(bot, home), 1000);
+    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 1000);
   });
 }
 
-// Random action every tick: jump, hotbar swap, arm swing, or short sneak
-function actionLoop(bot) {
-  if (!bot.entity) return;
+function actionLoop(r, bot) {
+  if (r.bot !== bot || !bot.entity) return;
 
-  actionTimeout = setTimeout(() => {
-    if (!bot.entity) return;
+  r.actionTimeout = setTimeout(() => {
+    if (r.bot !== bot || !bot.entity) return;
     try {
       const a = rand(1, 4);
       if (a === 1) {
         bot.setControlState('jump', true);
         setTimeout(() => bot.entity && bot.setControlState('jump', false), 400);
-        console.log('[Action] Jumped');
       } else if (a === 2) {
         bot.setQuickBarSlot(rand(0, 8));
-        console.log('[Action] Switched hotbar slot');
       } else if (a === 3) {
         bot.swingArm('right');
-        console.log('[Action] Swung arm');
       } else {
         bot.setControlState('sneak', true);
         setTimeout(() => bot.entity && bot.setControlState('sneak', false), 800);
-        console.log('[Action] Crouched');
       }
     } catch (err) {
-      console.log('[Action] Failed:', err.message);
+      console.log(`[${r.name}] Action failed:`, err.message);
     }
-    actionLoop(bot);
+    actionLoop(r, bot);
   }, actionInterval);
 }
 
-async function createBot() {
+function startActivity(r, bot, home) {
+  if (enableMovement && home) movementLoop(r, bot, home);
+  actionLoop(r, bot);
+}
+
+function pauseActivity(r, bot, home) {
+  if (r.bot !== bot || !bot.entity) return;
+  console.log(`[${r.name}] Pausing for ${pauseFor / 60000} min`);
+  if (r.moveTimeout) clearTimeout(r.moveTimeout);
+  if (r.actionTimeout) clearTimeout(r.actionTimeout);
+  r.moveTimeout = r.actionTimeout = null;
+  stopMoving(bot);
+
+  r.resumeTimeout = setTimeout(() => {
+    if (r.bot !== bot || !bot.entity) return;
+    console.log(`[${r.name}] Resuming activity`);
+    startActivity(r, bot, home);
+  }, pauseFor);
+}
+
+async function connectRunner(r) {
+  if (r.stopped) return;
+
   const { host, port } = await resolveTarget();
-  console.log(`[Bot] Connecting to ${host}:${port} as ${username} (auth: ${auth})...`);
+  if (r.stopped) return;
+  console.log(`[${r.name}] Connecting to ${host}:${port}...`);
 
   mc.ping({ host, port }, (err, res) => {
-    if (err) return console.error('[Ping] Failed:', err.code || err.message);
-    console.log(`[Ping] Online. Version: ${res.version.name}, players: ${res.players.online}/${res.players.max}`);
+    if (err) return console.error(`[${r.name}] Ping failed:`, err.code || err.message);
+    console.log(`[${r.name}] Ping OK: ${res.version.name}, players ${res.players.online}/${res.players.max}`);
   });
 
   const bot = mineflayer.createBot({
     host,
     port,
-    username,
+    username: r.name,
     version,
     auth,
     checkTimeoutInterval: 60 * 1000
   });
-
-  // Physics stays off until the bot is settled in a loaded world
+  r.bot = bot;
+  r.loggedIn = false;
   bot.physicsEnabled = false;
 
-  bot._client.on('connect', () => console.log('[Bot] TCP connected'));
-
   const watchdog = setTimeout(() => {
-    console.log('[Bot] No login after 30s, forcing reconnect');
+    console.log(`[${r.name}] No login after 30s, retrying`);
     bot.end('login timeout');
   }, 30000);
 
   bot.once('login', () => {
     clearTimeout(watchdog);
-    console.log(`[Bot] Logged in as ${username}`);
-    reconnectDelay = 10000;
+    r.loggedIn = true;
+    r.reconnectDelay = 10000;
+    console.log(`[${r.name}] Logged in`);
   });
 
   if (serverPassword) {
@@ -178,41 +277,99 @@ async function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[Bot] Spawned!');
-    clearTimers();
+    console.log(`[${r.name}] Spawned`);
+    clearActivity(r);
 
-    if (!enableMovement) {
-      actionLoop(bot);
-      return;
-    }
+    const begin = (home) => {
+      startActivity(r, bot, home);
+      r.pauseInterval = setInterval(() => pauseActivity(r, bot, home), pauseEvery);
+    };
 
-    console.log(`[Bot] Waiting ${physicsDelay / 1000}s before enabling movement...`);
-    physicsTimeout = setTimeout(() => {
-      if (!bot.entity) return;
+    if (!enableMovement) return begin(null);
+
+    r.physicsTimeout = setTimeout(() => {
+      if (r.bot !== bot || !bot.entity) return;
       const home = bot.entity.position.clone();
       bot.physicsEnabled = true;
-      console.log(`[Bot] Movement enabled, home at ${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)}`);
-      movementLoop(bot, home);
-      actionLoop(bot);
+      console.log(`[${r.name}] Movement enabled`);
+      begin(home);
     }, physicsDelay);
   });
 
-  // Log chat/queue messages
-  bot.on('messagestr', (msg) => {
-    if (msg.trim()) console.log('[Chat]', msg);
-  });
-
-  bot.on('kicked', (reason) => console.log('[Bot] Kicked:', JSON.stringify(reason)));
-  bot.on('error', (err) => console.error('[Bot] Error:', err.message || err));
+  bot.on('kicked', (reason) => console.log(`[${r.name}] Kicked:`, JSON.stringify(reason)));
+  bot.on('error', (err) => console.error(`[${r.name}] Error:`, err.message || err));
 
   bot.once('end', (reason) => {
     clearTimeout(watchdog);
-    console.log(`[Bot] Disconnected (${reason}). Reconnecting in ${reconnectDelay / 1000}s...`);
-    clearTimers();
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = setTimeout(createBot, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 120000);
+    clearActivity(r);
+    r.loggedIn = false;
+    if (r.stopped) {
+      console.log(`[${r.name}] Disconnected (window over)`);
+      return;
+    }
+    console.log(`[${r.name}] Disconnected (${reason}). Reconnecting in ${r.reconnectDelay / 1000}s...`);
+    r.reconnectTimeout = setTimeout(() => connectRunner(r), r.reconnectDelay);
+    r.reconnectDelay = Math.min(r.reconnectDelay * 2, 120000);
   });
 }
 
-createBot();
+function startRunner(name) {
+  if (runners.has(name)) return;
+  console.log(`[Scheduler] Starting ${name}`);
+  const r = {
+    name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000,
+    moveTimeout: null, actionTimeout: null, physicsTimeout: null,
+    resumeTimeout: null, pauseInterval: null, reconnectTimeout: null
+  };
+  runners.set(name, r);
+  connectRunner(r);
+}
+
+function stopRunner(name) {
+  const r = runners.get(name);
+  if (!r) return;
+  console.log(`[Scheduler] Stopping ${name}`);
+  r.stopped = true;
+  clearActivity(r);
+  if (r.reconnectTimeout) clearTimeout(r.reconnectTimeout);
+  try { if (r.bot) r.bot.quit('window over'); } catch (_) {}
+  runners.delete(name);
+}
+
+// ---------------- Scheduler ----------------
+let noneOnlineSince = null;
+
+function tick() {
+  const wanted = wantedNow();
+
+  const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
+  const scheduledOnline = loggedIn.some((n) => wanted.has(n));
+
+  // Safety net: if nobody is online for 2+ minutes, bring in an extra bot
+  if (loggedIn.length === 0) {
+    if (!noneOnlineSince) noneOnlineSince = Date.now();
+    if (!emergencyName && Date.now() - noneOnlineSince > 120000) {
+      const spare = BOT_NAMES.filter((n) => !wanted.has(n));
+      if (spare.length) {
+        emergencyName = spare[rand(0, spare.length - 1)];
+        console.log(`[Scheduler] Nobody online, bringing in ${emergencyName} as backup`);
+      }
+    }
+  } else {
+    noneOnlineSince = null;
+  }
+  if (emergencyName && scheduledOnline) {
+    console.log(`[Scheduler] Scheduled bot is back, releasing backup ${emergencyName}`);
+    emergencyName = null;
+  }
+  if (emergencyName) wanted.add(emergencyName);
+
+  for (const name of BOT_NAMES) {
+    if (wanted.has(name) && !runners.has(name)) startRunner(name);
+    if (!wanted.has(name) && runners.has(name)) stopRunner(name);
+  }
+}
+
+console.log(`[Scheduler] Bots: ${BOT_NAMES.join(', ')}`);
+tick();
+setInterval(tick, 30000);
