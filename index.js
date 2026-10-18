@@ -255,18 +255,6 @@ function stopMoving(bot) {
   });
 }
 
-function isUnsafeAhead(bot) {
-  const pos = bot.entity.position;
-  const yaw = bot.entity.yaw;
-  const ahead = pos.offset(-Math.sin(yaw) * 1.2, 0, -Math.cos(yaw) * 1.2);
-  const below1 = bot.blockAt(ahead.offset(0, -1, 0));
-  const below2 = bot.blockAt(ahead.offset(0, -2, 0));
-  const feet = bot.blockAt(ahead);
-  const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
-  if (liquid(feet) || liquid(below1)) return true;
-  return below1 && below2 && below1.name === 'air' && below2.name === 'air';
-}
-
 // ---------------- Per-bot runner ----------------
 const runners = new Map(); // name -> runner state
 let emergencyName = null;
@@ -278,27 +266,101 @@ function clearActivity(r) {
   if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
 }
 
-function movementLoop(r, bot, home) {
-  if (r.bot !== bot || !bot.entity) return;
+function probe(bot, yaw, dist = 1.0) {
+  const p = bot.entity.position;
+  const at = p.offset(-Math.sin(yaw) * dist, 0, -Math.cos(yaw) * dist);
+  const feet = bot.blockAt(at);
+  const head = bot.blockAt(at.offset(0, 1, 0));
+  const top = bot.blockAt(at.offset(0, 2, 0));
+  const below1 = bot.blockAt(at.offset(0, -1, 0));
+  const below2 = bot.blockAt(at.offset(0, -2, 0));
+  const solid = (b) => b && b.boundingBox === 'block';
+  const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
 
+  // one-block step the bot can jump onto
+  const step = solid(feet) && !solid(head) && !solid(top);
+  // wall or low ceiling it can't pass
+  const blocked = solid(head) || (solid(feet) && solid(top));
+  // liquid, or a drop of 2+ blocks
+  const unsafe = liquid(feet) || liquid(below1) || (!solid(feet) && !solid(below1) && !solid(below2));
+  return { blocked, step, unsafe };
+}
+
+// Picks a direction that isn't blocked or dangerous. Returns null if boxed in.
+function pickHeading(bot, home, awayFrom) {
   const pos = bot.entity.position;
   const dist = Math.hypot(pos.x - home.x, pos.z - home.z);
-  const yaw = dist > maxRadius
-    ? Math.atan2(-(home.x - pos.x), -(home.z - pos.z))
-    : Math.random() * Math.PI * 2 - Math.PI;
+
+  for (let i = 0; i < 14; i++) {
+    let yaw;
+    if (awayFrom !== undefined) {
+      // just hit something: turn roughly around
+      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2;
+    } else if (dist > maxRadius) {
+      // too far from spawn: head back
+      yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z)) + (Math.random() - 0.5) * 0.8;
+    } else {
+      yaw = Math.random() * Math.PI * 2 - Math.PI;
+    }
+    const pr = probe(bot, yaw);
+    if (!pr.blocked && !pr.unsafe) return yaw;
+  }
+  return null;
+}
+
+function movementLoop(r, bot, home, awayFrom) {
+  if (r.bot !== bot || !bot.entity) return;
+
+  const yaw = pickHeading(bot, home, awayFrom);
+  if (yaw === null) {
+    // boxed in: turn to a random direction and try again shortly
+    stopMoving(bot);
+    bot.look(Math.random() * Math.PI * 2 - Math.PI, 0, true).catch(() => {});
+    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 800);
+    return;
+  }
 
   bot.look(yaw, 0, true).then(() => {
     if (r.bot !== bot || !bot.entity) return;
     stopMoving(bot);
-
-    if (isUnsafeAhead(bot)) {
-      r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 300);
-      return;
-    }
-
     bot.setControlState('forward', true);
     if (Math.random() < 0.4) bot.setControlState('sprint', true);
-    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), getActionInterval());
+
+    const endAt = Date.now() + getActionInterval();
+    let last = bot.entity.position.clone();
+    let still = 0;
+
+    // Check the path every 0.4s while walking
+    const watch = () => {
+      if (r.bot !== bot || !bot.entity) return;
+
+      if (Date.now() >= endAt) {
+        movementLoop(r, bot, home);
+        return;
+      }
+
+      const p = bot.entity.position;
+      const moved = Math.hypot(p.x - last.x, p.z - last.z);
+      last = p.clone();
+      still = moved < 0.05 ? still + 1 : 0;
+
+      const pr = probe(bot, bot.entity.yaw, 0.8);
+
+      // wall, drop, or stuck for ~1s: turn away from this direction
+      if (pr.blocked || pr.unsafe || still >= 2) {
+        movementLoop(r, bot, home, bot.entity.yaw);
+        return;
+      }
+
+      // one-block step ahead: jump onto it
+      if (pr.step) {
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.entity && bot.setControlState('jump', false), 300);
+      }
+
+      r.moveTimeout = setTimeout(watch, 400);
+    };
+    r.moveTimeout = setTimeout(watch, 400);
   }).catch(() => {
     r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 1000);
   });
