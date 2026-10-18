@@ -31,7 +31,7 @@ const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);  
 const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
 
 // Waiting for the server to start
-const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
+const waitForServerOn = process.env.WAIT_FOR_SERVER == 'true'; // set false to join without checking
 const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
 const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
 const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '1', 10); // join anyway after this many timeouts in a row
