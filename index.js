@@ -5,17 +5,32 @@ const http = require('http');
 
 // HTTP server for Railway health checks
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
+const httpServer = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Minecraft Bots are operational.\n');
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('[Shutdown] SIGTERM received, stopping all bots...');
+  for (const name of BOT_NAMES) stopRunner(name);
+  httpServer.close();
+  process.exit(0);
+});
+process.on('SIGINT', async () => {
+  console.log('[Shutdown] SIGINT received, stopping all bots...');
+  for (const name of BOT_NAMES) stopRunner(name);
+  httpServer.close();
+  process.exit(0);
+});
 
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
-  .split(',').map((s) => s.trim()).filter(Boolean);
-const version = process.env.MC_VERSION || false;          // false = use the server's real version when known
+  .split(',').map((s) => s.trim()).filter(Boolean)
+  .filter((v, i, a) => a.indexOf(v) === i); // remove duplicates
+const version = process.env.MC_VERSION ?? false;          // false = use the server's real version when known
 const auth = process.env.AUTH || 'offline';
 const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';
@@ -96,6 +111,14 @@ function getDaySchedule(dayStartMs) {
   const key = dayKey(dayStartMs);
   if (scheduleCache.has(key)) return scheduleCache.get(key);
 
+  // Clean old cache entries (older than 2 days)
+  const cutoff = dayStartMs - 2 * 24 * HOUR;
+  for (const k of scheduleCache.keys()) {
+    const [year, month, day] = k.split('-').map(Number);
+    const entryDate = Date.UTC(year, month - 1, day);
+    if (entryDate < cutoff) scheduleCache.delete(k);
+  }
+
   const rng = seededRng('day:' + key);
   const n = BOT_NAMES.length;
 
@@ -166,23 +189,41 @@ function rand(min, max) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const forcePort = parseInt(process.env.FORCE_PORT || '0', 10); // e.g. 25565 skips the SRV lookup
 
+let cachedTarget = null;
+let cachedTargetTime = 0;
+const TARGET_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 async function resolveTarget() {
+  const now = Date.now();
+  if (cachedTarget && now - cachedTargetTime < TARGET_CACHE_TTL) {
+    return cachedTarget;
+  }
+
+  let target;
   if (forcePort) {
+    target = { host: domain, port: forcePort };
     console.log(`[DNS] Using forced address ${domain}:${forcePort}`);
-    return { host: domain, port: forcePort };
-  }
-  try {
-    const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
-    if (records.length) {
-      const r = records.sort((a, b) => a.priority - b.priority)[0];
-      console.log(`[DNS] SRV record found: ${r.name}:${r.port}`);
-      return { host: r.name, port: r.port };
+  } else {
+    try {
+      const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
+      if (records.length) {
+        const r = records.sort((a, b) => a.priority - b.priority)[0];
+        target = { host: r.name, port: r.port };
+        console.log(`[DNS] SRV record found: ${r.name}:${r.port}`);
+      } else {
+        target = { host: domain, port: fallbackPort };
+        console.log(`[DNS] No SRV records, using ${domain}:${fallbackPort}`);
+      }
+    } catch (e) {
+      target = { host: domain, port: fallbackPort };
+      console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
     }
-  } catch (e) {
-    console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
   }
-  return { host: domain, port: fallbackPort };
+  cachedTarget = target;
+  cachedTargetTime = now;
+  return target;
 }
+
 // ---------------- Server status check ----------------
 let serverReady = false; // last known state, used by the scheduler
 
@@ -214,8 +255,11 @@ async function waitForServer(r) {
   let lastLog = 0;
   let timeouts = 0;
 
+  // Resolve target once before the loop
+  const target = await resolveTarget();
+  const { host, port } = target;
+
   while (!r.stopped) {
-    const { host, port } = await resolveTarget();
     if (!waitForServerOn) return { host, port, mcVersion: null };
 
     const status = await pingServer(host, port);
@@ -261,8 +305,10 @@ function isUnsafeAhead(bot) {
   const below1 = bot.blockAt(ahead.offset(0, -1, 0));
   const below2 = bot.blockAt(ahead.offset(0, -2, 0));
   const feet = bot.blockAt(ahead);
+  const head = bot.blockAt(ahead.offset(0, 1, 0)); // check head level
   const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
-  if (liquid(feet) || liquid(below1)) return true;
+  if (liquid(feet) || liquid(below1) || liquid(head)) return true;
+  if (head && head.name !== 'air') return true; // solid block at head level
   return below1 && below2 && below1.name === 'air' && below2.name === 'air';
 }
 
@@ -278,7 +324,7 @@ function clearActivity(r) {
 }
 
 function movementLoop(r, bot, home) {
-  if (r.bot !== bot || !bot.entity) return;
+  if (r.bot !== bot || !bot.entity || r.paused) return;
 
   const pos = bot.entity.position;
   const dist = Math.hypot(pos.x - home.x, pos.z - home.z);
@@ -287,7 +333,7 @@ function movementLoop(r, bot, home) {
     : Math.random() * Math.PI * 2 - Math.PI;
 
   bot.look(yaw, 0, true).then(() => {
-    if (r.bot !== bot || !bot.entity) return;
+    if (r.bot !== bot || !bot.entity || r.paused) return;
     stopMoving(bot);
 
     if (isUnsafeAhead(bot)) {
@@ -299,15 +345,16 @@ function movementLoop(r, bot, home) {
     if (Math.random() < 0.4) bot.setControlState('sprint', true);
     r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), getActionInterval());
   }).catch(() => {
+    if (r.bot !== bot || !bot.entity || r.paused) return;
     r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 1000);
   });
 }
 
 function actionLoop(r, bot) {
-  if (r.bot !== bot || !bot.entity) return;
+  if (r.bot !== bot || !bot.entity || r.paused) return;
 
   r.actionTimeout = setTimeout(() => {
-    if (r.bot !== bot || !bot.entity) return;
+    if (r.bot !== bot || !bot.entity || r.paused) return;
     try {
       const a = rand(1, 4);
       if (a === 1) {
@@ -336,6 +383,7 @@ function startActivity(r, bot, home) {
 function pauseActivity(r, bot, home) {
   if (r.bot !== bot || !bot.entity) return;
   console.log(`[${r.name}] Pausing for ${pauseFor / 60000} min`);
+  r.paused = true;
   if (r.moveTimeout) clearTimeout(r.moveTimeout);
   if (r.actionTimeout) clearTimeout(r.actionTimeout);
   r.moveTimeout = r.actionTimeout = null;
@@ -343,6 +391,7 @@ function pauseActivity(r, bot, home) {
 
   r.resumeTimeout = setTimeout(() => {
     if (r.bot !== bot || !bot.entity) return;
+    r.paused = false;
     console.log(`[${r.name}] Resuming activity`);
     startActivity(r, bot, home);
   }, pauseFor);
@@ -369,6 +418,7 @@ async function connectRunner(r) {
   r.bot = bot;
   r.loggedIn = false;
   r.movementOn = false;
+  r.paused = false;
   bot.physicsEnabled = false;
 
   const watchdog = setTimeout(() => {
@@ -388,8 +438,11 @@ async function connectRunner(r) {
   if (serverPassword) {
     bot.on('messagestr', (msg) => {
       const m = msg.toLowerCase();
-      if (m.includes('/register')) bot.chat(`/register ${serverPassword} ${serverPassword}`);
-      else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
+      // Only auto-login for system-like messages, not player chat
+      if (/^\[server\]|^\[.*\]|^server>|^>/.test(msg) || m.startsWith('/')) {
+        if (m.includes('/register')) bot.chat(`/register ${serverPassword} ${serverPassword}`);
+        else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
+      }
     });
   }
 
@@ -447,7 +500,7 @@ function startRunner(name, immediate = false) {
     name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000, movementOn: false,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
     resumeTimeout: null, pauseInterval: null, reconnectTimeout: null,
-    stableTimeout: null, startTimeout: null
+    stableTimeout: null, startTimeout: null, paused: false
   };
   runners.set(name, r);
   r.startTimeout = setTimeout(() => connectRunner(r), delay);
@@ -472,7 +525,8 @@ function tick() {
   const wanted = wantedNow();
 
   const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
-  const scheduledOnline = loggedIn.some((n) => wanted.has(n));
+  const scheduledOnlineCount = loggedIn.filter((n) => wanted.has(n)).length;
+  const wantedCount = wanted.size;
 
   // Safety net: if the server is up but nobody is online for 2+ minutes, add a backup bot.
   if (loggedIn.length === 0 && serverReady) {
@@ -487,8 +541,9 @@ function tick() {
   } else {
     noneOnlineSince = null;
   }
-  if (emergencyName && scheduledOnline) {
-    console.log(`[Scheduler] Scheduled bot is back, releasing backup ${emergencyName}`);
+  // Release emergency bot when most scheduled bots are back online
+  if (emergencyName && scheduledOnlineCount >= Math.max(1, wantedCount - 1)) {
+    console.log(`[Scheduler] Scheduled bots are back (${scheduledOnlineCount}/${wantedCount}), releasing backup ${emergencyName}`);
     emergencyName = null;
   }
   if (emergencyName) wanted.add(emergencyName);
