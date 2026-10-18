@@ -224,10 +224,13 @@ async function resolveTarget() {
 // ---------------- Server status check ----------------
 let serverReady = false; // last known state, used by the scheduler
 
-function pingServer(host, port) {
+async function pingServer(host, port) {
+  let target = host;
+  try { target = (await dns.resolve4(host))[0] || host; } catch (_) { /* keep hostname */ }
+
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ ready: false, text: 'ping timeout' }), pingTimeout);
-    mc.ping({ host, port }, (err, res) => {
+    mc.ping({ host: target, port }, (err, res) => {
       clearTimeout(timer);
       if (err || !res) return resolve({ ready: false, text: `unreachable (${err ? err.code || err.message : 'no response'})` });
 
