@@ -170,12 +170,14 @@ async function resolveTarget() {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
     if (records.length) {
       const r = records.sort((a, b) => a.priority - b.priority)[0];
+      console.log(`[DNS] SRV record found: ${r.name}:${r.port}`);
       return { host: r.name, port: r.port };
     }
-  } catch (e) { /* no SRV, use fallback */ }
+  } catch (e) {
+    console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
+  }
   return { host: domain, port: fallbackPort };
 }
-
 // ---------------- Server status check ----------------
 let serverReady = false; // last known state, used by the scheduler
 
