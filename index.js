@@ -463,6 +463,7 @@ async function connectRunner(r) {
     username: r.name,
     version: useVersion,
     auth,
+    connect: directConnect(host, port),   // <- new line
     checkTimeoutInterval: 60 * 1000
   });
   r.bot = bot;
