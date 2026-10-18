@@ -10,19 +10,6 @@ http.createServer((req, res) => {
   res.end('Minecraft Bots are operational.\n');
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
-const net = require('net');
-const https = require('https');
-
-function tcpTest(host, port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host, port });
-    s.setTimeout(8000);
-    s.on('connect', () => { s.destroy(); resolve('OPEN'); });
-    s.on('timeout', () => { s.destroy(); resolve('TIMEOUT'); });
-    s.on('error', (e) => resolve(e.code || e.message));
-  });
-}
-
 (async () => {
   https.get('https://api.ipify.org', (res) => {
     let ip = '';
