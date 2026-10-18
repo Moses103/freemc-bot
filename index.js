@@ -461,9 +461,9 @@ async function connectRunner(r) {
     host,
     port,
     username: r.name,
-    version: useVersion,
+    version: false, // Force auto-detect so proxy version handshakes don't clash
     auth,
-    connect: directConnect(host, port),   // <- new line
+    connect: directConnect(host, port),
     checkTimeoutInterval: 60 * 1000
   });
   r.bot = bot;
@@ -541,8 +541,10 @@ async function connectRunner(r) {
 
 function startRunner(name, immediate = false) {
   if (runners.has(name)) return;
-  const delay = immediate ? 0 : rand(0, joinJitter);
-  console.log(`[Scheduler] Starting ${name}${delay ? ` (joining in ${Math.round(delay / 1000)}s)` : ''}`);
+  // Increase initial jitter buffer to 15-45 seconds so bots never flood the proxy together
+  const delay = immediate ? 0 : rand(15000, 45000);
+  console.log(`[Scheduler] Starting ${name} (joining in ${Math.round(delay / 1000)}s)...`);
+  
   const r = {
     name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000, movementOn: false,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
