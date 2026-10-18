@@ -2,6 +2,8 @@ const mineflayer = require('mineflayer');
 const mc = require('minecraft-protocol');
 const dns = require('dns').promises;
 const http = require('http');
+const https = require('https');
+const net = require('net');
 
 // HTTP server for Railway health checks
 const PORT = process.env.PORT || 3000;
@@ -13,7 +15,7 @@ http.createServer((req, res) => {
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // set FORCE_PORT=0 to use the SRV record again
+const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // FORCE_PORT=0 uses SRV/fallback instead
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const version = process.env.MC_VERSION || false;          // false = use the server's real version when known
@@ -23,7 +25,7 @@ const enableMovement = process.env.MOVEMENT !== 'false';
 const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '10000', 10);
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
 const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10);
-const maxInterval = parseInt(process.env.MAX_INTERVAL || '5000', 10);
+const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10);
 const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
 const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 3 minutes
 const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
@@ -44,6 +46,29 @@ const MAX_GAP_H = 5.5;                      // max gap between start times (guar
 if (BOT_NAMES.length < 5) {
   console.warn('[Config] Need at least 5 bots to cover 24h with 6h windows!');
 }
+
+// ---------------- Startup network diagnostics ----------------
+https.get('https://api.ipify.org', (res) => {
+  let ip = '';
+  res.on('data', (d) => (ip += d));
+  res.on('end', () => console.log('[Net] Outbound IP:', ip));
+}).on('error', (e) => console.log('[Net] IP lookup failed:', e.code || e.message));
+
+function tcpTest(host, port) {
+  return new Promise((resolve) => {
+    const s = net.connect({ host, port });
+    s.setTimeout(8000);
+    s.on('connect', () => { s.destroy(); resolve('OPEN'); });
+    s.on('timeout', () => { s.destroy(); resolve('TIMEOUT'); });
+    s.on('error', (e) => resolve(e.code || e.message));
+  });
+}
+
+(async () => {
+  for (const p of [25565, 33838]) {
+    console.log(`[Net] TCP ${domain}:${p} ->`, await tcpTest(domain, p));
+  }
+})();
 
 // Random interval, picked fresh every time it's used
 function getActionInterval() {
@@ -266,6 +291,7 @@ function clearActivity(r) {
   if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
 }
 
+// Looks at the cell ahead in a given direction (yaw) and reports what's there
 function probe(bot, yaw, dist = 1.0) {
   const p = bot.entity.position;
   const at = p.offset(-Math.sin(yaw) * dist, 0, -Math.cos(yaw) * dist);
@@ -277,12 +303,9 @@ function probe(bot, yaw, dist = 1.0) {
   const solid = (b) => b && b.boundingBox === 'block';
   const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
 
-  // one-block step the bot can jump onto
-  const step = solid(feet) && !solid(head) && !solid(top);
-  // wall or low ceiling it can't pass
-  const blocked = solid(head) || (solid(feet) && solid(top));
-  // liquid, or a drop of 2+ blocks
-  const unsafe = liquid(feet) || liquid(below1) || (!solid(feet) && !solid(below1) && !solid(below2));
+  const step = solid(feet) && !solid(head) && !solid(top);                         // one-block step to jump onto
+  const blocked = solid(head) || (solid(feet) && solid(top));                      // wall or low ceiling
+  const unsafe = liquid(feet) || liquid(below1) || (!solid(feet) && !solid(below1) && !solid(below2)); // liquid or 2+ drop
   return { blocked, step, unsafe };
 }
 
@@ -294,11 +317,9 @@ function pickHeading(bot, home, awayFrom) {
   for (let i = 0; i < 14; i++) {
     let yaw;
     if (awayFrom !== undefined) {
-      // just hit something: turn roughly around
-      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2;
+      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2; // just hit something: turn roughly around
     } else if (dist > maxRadius) {
-      // too far from spawn: head back
-      yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z)) + (Math.random() - 0.5) * 0.8;
+      yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z)) + (Math.random() - 0.5) * 0.8; // head back to spawn
     } else {
       yaw = Math.random() * Math.PI * 2 - Math.PI;
     }
@@ -530,8 +551,10 @@ function stopRunner(name) {
 
 // ---------------- Scheduler ----------------
 let noneOnlineSince = null;
+let shuttingDown = false;
 
 function tick() {
+  if (shuttingDown) return;
   const wanted = wantedNow();
 
   const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
@@ -565,3 +588,14 @@ function tick() {
 console.log(`[Scheduler] Bots: ${BOT_NAMES.join(', ')}`);
 tick();
 setInterval(tick, 30000);
+
+// ---------------- Clean shutdown (redeploys) ----------------
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Shutdown] ${signal} received, disconnecting bots`);
+  for (const name of [...runners.keys()]) stopRunner(name);
+  setTimeout(() => process.exit(0), 1500);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
