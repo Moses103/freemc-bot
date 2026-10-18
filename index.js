@@ -13,6 +13,7 @@ http.createServer((req, res) => {
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
+const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // set FORCE_PORT=0 to use the SRV record again
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const version = process.env.MC_VERSION || false;          // false = use the server's real version when known
@@ -166,13 +167,20 @@ function rand(min, max) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function resolveTarget() {
+  if (forcePort) {
+    console.log(`[DNS] Using forced address ${domain}:${forcePort}`);
+    return { host: domain, port: forcePort };
+  }
   try {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
     if (records.length) {
       const r = records.sort((a, b) => a.priority - b.priority)[0];
+      console.log(`[DNS] SRV record found: ${r.name}:${r.port}`);
       return { host: r.name, port: r.port };
     }
-  } catch (e) { /* no SRV, use fallback */ }
+  } catch (e) {
+    console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
+  }
   return { host: domain, port: fallbackPort };
 }
 
