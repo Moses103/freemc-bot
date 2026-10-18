@@ -13,7 +13,7 @@ http.createServer((req, res) => {
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale')
+const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const version = process.env.MC_VERSION || false;          // false = auto-detect
 const auth = process.env.AUTH || 'offline';
@@ -21,21 +21,32 @@ const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses
 const enableMovement = process.env.MOVEMENT !== 'false';
 const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '10000', 10);
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
-const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10); 
-const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10); 
-const actionInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
+const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10);
+const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10);
 const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
-const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 5 minutes
+const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 3 minutes
+const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
 
 // Waiting for the server to start
-const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
-const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10); // ping every 30s while waiting
-const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);       // extra wait after it's ready
+const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false';
+const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
+const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
 
 const HOUR = 3600 * 1000;
-const WINDOW_MS = 6 * HOUR;                 // each bot is online 6h per day
+const WINDOW_H = 6;                         // each bot is online 6h per day
+const WINDOW_MS = WINDOW_H * HOUR;
 const MARGIN_MS = 5 * 60 * 1000;            // join 5 min early / leave 5 min late for overlap
-const MAX_GAP_H = 5.5;                      // max gap between window starts (guarantees coverage)
+const MIN_GAP_H = 2;                        // min time between two bots' start times
+const MAX_GAP_H = 5.5;                      // max gap between start times (guarantees coverage)
+
+if (BOT_NAMES.length < 5) {
+  console.warn('[Config] Need at least 5 bots to cover 24h with 6h windows!');
+}
+
+// Random interval, picked fresh every time it's used
+function getActionInterval() {
+  return Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
+}
 
 // ---------------- Daily schedule (UTC) ----------------
 function hashStr(s) {
@@ -55,37 +66,71 @@ function mulberry32(a) {
   };
 }
 
+const seededRng = (label) => mulberry32(hashStr(label));
+const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+function shuffle(arr, rng) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Hours after 00:00 UTC when the first window of a day starts (0 - 1.5h, random per day)
+function firstStartHours(dayStartMs) {
+  return seededRng('first:' + dayKey(dayStartMs))() * 1.5;
+}
+
+// The two bots that take the last two slots of a day (these windows can run past midnight)
+function closersOf(dayStartMs) {
+  const rng = seededRng('closers:' + dayKey(dayStartMs));
+  return shuffle(BOT_NAMES, rng).slice(0, 2);
+}
+
 const scheduleCache = new Map();
 
+// Windows for one day. The last window is placed so it reaches into the next day's first
+// window, and start times are 2-5.5h apart, so with 6h windows there is always overlap.
 function getDaySchedule(dayStartMs) {
-  const key = new Date(dayStartMs).toISOString().slice(0, 10);
+  const key = dayKey(dayStartMs);
   if (scheduleCache.has(key)) return scheduleCache.get(key);
 
-  const rng = mulberry32(hashStr(key));
+  const rng = seededRng('day:' + key);
+  const n = BOT_NAMES.length;
 
-  const names = [...BOT_NAMES];
-  for (let i = names.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [names[i], names[j]] = [names[j], names[i]];
-  }
+  const f = firstStartHours(dayStartMs);
+  const fNext = firstStartHours(dayStartMs + 24 * HOUR);
+  const lMin = 24 - WINDOW_H + fNext + 0.25;   // last window must still be running when the next day starts
+  const l = lMin + rng() * 1.5;
 
-  const n = names.length;
-  const lastStart = 24 - 6;
-  let starts;
-  for (let attempt = 0; attempt < 10000; attempt++) {
+  // random start times between f and l, with min/max gaps
+  let starts = null;
+  for (let attempt = 0; attempt < 20000 && !starts; attempt++) {
     const mids = [];
-    for (let i = 0; i < n - 2; i++) mids.push(rng() * lastStart);
-    starts = [0, ...mids.sort((a, b) => a - b), lastStart];
+    for (let i = 0; i < n - 2; i++) mids.push(f + rng() * (l - f));
+    const cand = [f, ...mids.sort((a, b) => a - b), l];
     let ok = true;
-    for (let i = 1; i < starts.length; i++) {
-      if (starts[i] - starts[i - 1] > MAX_GAP_H) { ok = false; break; }
+    for (let i = 1; i < cand.length; i++) {
+      const gap = cand[i] - cand[i - 1];
+      if (gap < MIN_GAP_H || gap > MAX_GAP_H) { ok = false; break; }
     }
-    if (ok) break;
-    starts = null;
+    if (ok) starts = cand;
   }
-  if (!starts) {
-    starts = names.map((_, i) => (lastStart / (n - 1)) * i);
+  if (!starts) starts = Array.from({ length: n }, (_, i) => f + ((l - f) * i) / (n - 1));
+
+  // last two slots go to today's closers; the rest are shuffled into the first slots
+  const closers = closersOf(dayStartMs);
+  const prevClosers = closersOf(dayStartMs - 24 * HOUR);
+  const pool = shuffle(BOT_NAMES.filter((x) => !closers.includes(x)), rng);
+
+  // the bots that closed yesterday may still be online after midnight, so they can't open today
+  if (prevClosers.includes(pool[0])) {
+    const k = pool.findIndex((x) => !prevClosers.includes(x));
+    if (k > 0) [pool[0], pool[k]] = [pool[k], pool[0]];
   }
+  const names = [...pool, ...closers];
 
   const windows = names.map((name, i) => ({
     name,
@@ -170,14 +215,12 @@ async function waitForServer(r) {
       if (lastText !== null) console.log(`[${r.name}] Server is up (${status.text}). Joining in ${readyDelay / 1000}s...`);
       await sleep(readyDelay);
       if (r.stopped) return null;
-      // Re-check once more so we don't join right as it goes back to sleep
       const again = await pingServer(host, port);
       serverReady = again.ready;
       if (again.ready) return { host, port };
       continue;
     }
 
-    // Log when the status changes, or every 5 minutes
     if (status.text !== lastText || Date.now() - lastLog > 5 * 60 * 1000) {
       console.log(`[${r.name}] Waiting for server... status: ${status.text}`);
       lastText = status.text;
@@ -237,7 +280,7 @@ function movementLoop(r, bot, home) {
 
     bot.setControlState('forward', true);
     if (Math.random() < 0.4) bot.setControlState('sprint', true);
-    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), actionInterval);
+    r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), getActionInterval());
   }).catch(() => {
     r.moveTimeout = setTimeout(() => movementLoop(r, bot, home), 1000);
   });
@@ -265,7 +308,7 @@ function actionLoop(r, bot) {
       console.log(`[${r.name}] Action failed:`, err.message);
     }
     actionLoop(r, bot);
-  }, actionInterval);
+  }, getActionInterval());
 }
 
 function startActivity(r, bot, home) {
@@ -362,23 +405,24 @@ async function connectRunner(r) {
       console.log(`[${r.name}] Disconnected (window over)`);
       return;
     }
-    // After a disconnect, connectRunner waits for the server again before rejoining
     console.log(`[${r.name}] Disconnected (${reason}). Reconnecting in ${r.reconnectDelay / 1000}s...`);
     r.reconnectTimeout = setTimeout(() => connectRunner(r), r.reconnectDelay);
     r.reconnectDelay = Math.min(r.reconnectDelay * 2, 120000);
   });
 }
 
-function startRunner(name) {
+function startRunner(name, immediate = false) {
   if (runners.has(name)) return;
-  console.log(`[Scheduler] Starting ${name}`);
+  const delay = immediate ? 0 : rand(0, joinJitter);
+  console.log(`[Scheduler] Starting ${name}${delay ? ` (joining in ${Math.round(delay / 1000)}s)` : ''}`);
   const r = {
     name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
-    resumeTimeout: null, pauseInterval: null, reconnectTimeout: null, stableTimeout: null
+    resumeTimeout: null, pauseInterval: null, reconnectTimeout: null,
+    stableTimeout: null, startTimeout: null
   };
   runners.set(name, r);
-  connectRunner(r);
+  r.startTimeout = setTimeout(() => connectRunner(r), delay);
 }
 
 function stopRunner(name) {
@@ -387,6 +431,7 @@ function stopRunner(name) {
   console.log(`[Scheduler] Stopping ${name}`);
   r.stopped = true;
   clearActivity(r);
+  if (r.startTimeout) clearTimeout(r.startTimeout);
   if (r.reconnectTimeout) clearTimeout(r.reconnectTimeout);
   try { if (r.bot) r.bot.quit('window over'); } catch (_) {}
   runners.delete(name);
@@ -402,7 +447,6 @@ function tick() {
   const scheduledOnline = loggedIn.some((n) => wanted.has(n));
 
   // Safety net: if the server is up but nobody is online for 2+ minutes, add a backup bot.
-  // Skipped while the server itself is down, since a backup couldn't join anyway.
   if (loggedIn.length === 0 && serverReady) {
     if (!noneOnlineSince) noneOnlineSince = Date.now();
     if (!emergencyName && Date.now() - noneOnlineSince > 120000) {
@@ -422,7 +466,7 @@ function tick() {
   if (emergencyName) wanted.add(emergencyName);
 
   for (const name of BOT_NAMES) {
-    if (wanted.has(name) && !runners.has(name)) startRunner(name);
+    if (wanted.has(name) && !runners.has(name)) startRunner(name, name === emergencyName);
     if (!wanted.has(name) && runners.has(name)) stopRunner(name);
   }
 }
