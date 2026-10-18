@@ -66,6 +66,16 @@ function tcpTest(host, port) {
   });
 }
 
+// Opens the socket ourselves so minecraft-protocol does NOT do its own SRV lookup
+// (the SRV record can point to port 33838, which Railway can't reach)
+function directConnect(host, port) {
+  return (client) => {
+    const socket = net.connect({ host, port });
+    client.setSocket(socket);
+    client.emit('connect');
+  };
+}
+
 (async () => {
   for (const p of [25565, 33838]) {
     console.log(`[Net] TCP ${domain}:${p} ->`, await tcpTest(domain, p));
