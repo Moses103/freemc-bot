@@ -164,8 +164,13 @@ function rand(min, max) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const forcePort = parseInt(process.env.FORCE_PORT || '0', 10); // e.g. 25565 skips the SRV lookup
 
 async function resolveTarget() {
+  if (forcePort) {
+    console.log(`[DNS] Using forced address ${domain}:${forcePort}`);
+    return { host: domain, port: forcePort };
+  }
   try {
     const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
     if (records.length) {
