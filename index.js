@@ -19,16 +19,18 @@ const version = process.env.MC_VERSION || false;          // false = auto-detect
 const auth = process.env.AUTH || 'offline';
 const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';
-const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '15000', 10);
+const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '10000', 10);
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
-const actionInterval = parseInt(process.env.ACTION_INTERVAL || '4000', 10);
+const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10); 
+const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10); 
+const actionInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
 const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
-const pauseFor = parseInt(process.env.PAUSE_FOR || String(5 * 60 * 1000), 10);      // 5 minutes
+const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 5 minutes
 
 // Waiting for the server to start
 const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
 const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10); // ping every 30s while waiting
-const readyDelay = parseInt(process.env.READY_DELAY || '15000', 10);       // extra wait after it's ready
+const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);       // extra wait after it's ready
 
 const HOUR = 3600 * 1000;
 const WINDOW_MS = 6 * HOUR;                 // each bot is online 6h per day
