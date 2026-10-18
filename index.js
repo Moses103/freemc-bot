@@ -23,7 +23,7 @@ const enableMovement = process.env.MOVEMENT !== 'false';
 const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '10000', 10);
 const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
 const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10);
-const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10);
+const maxInterval = parseInt(process.env.MAX_INTERVAL || '5000', 10);
 const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
 const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 3 minutes
 const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
