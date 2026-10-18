@@ -15,7 +15,7 @@ const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const version = process.env.MC_VERSION || false;          // false = auto-detect
+const version = process.env.MC_VERSION || false;          // false = use the server's real version when known
 const auth = process.env.AUTH || 'offline';
 const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';
@@ -28,9 +28,10 @@ const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);  
 const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
 
 // Waiting for the server to start
-const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false';
+const waitForServerOn = process.env.WAIT_FOR_SERVER !== 'false'; // set false to join without checking
 const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
 const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
+const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '3', 10); // join anyway after this many timeouts in a row
 
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                         // each bot is online 6h per day
@@ -91,8 +92,6 @@ function closersOf(dayStartMs) {
 
 const scheduleCache = new Map();
 
-// Windows for one day. The last window is placed so it reaches into the next day's first
-// window, and start times are 2-5.5h apart, so with 6h windows there is always overlap.
 function getDaySchedule(dayStartMs) {
   const key = dayKey(dayStartMs);
   if (scheduleCache.has(key)) return scheduleCache.get(key);
@@ -105,7 +104,6 @@ function getDaySchedule(dayStartMs) {
   const lMin = 24 - WINDOW_H + fNext + 0.25;   // last window must still be running when the next day starts
   const l = lMin + rng() * 1.5;
 
-  // random start times between f and l, with min/max gaps
   let starts = null;
   for (let attempt = 0; attempt < 20000 && !starts; attempt++) {
     const mids = [];
@@ -120,7 +118,6 @@ function getDaySchedule(dayStartMs) {
   }
   if (!starts) starts = Array.from({ length: n }, (_, i) => f + ((l - f) * i) / (n - 1));
 
-  // last two slots go to today's closers; the rest are shuffled into the first slots
   const closers = closersOf(dayStartMs);
   const prevClosers = closersOf(dayStartMs - 24 * HOUR);
   const pool = shuffle(BOT_NAMES.filter((x) => !closers.includes(x)), rng);
@@ -194,22 +191,35 @@ function pingServer(host, port) {
       const protocol = res.version ? res.version.protocol : -1;
       // Placeholder statuses (Sleeping, Queued, Starting...) use protocol -1
       const placeholder = protocol <= 0 || /sleep|queue|start|offline|stopp|wait|load|hibern/i.test(text);
-      resolve({ ready: !placeholder, text: `${text} (protocol ${protocol}, players ${res.players.online}/${res.players.max})` });
+      const m = text.match(/\d+\.\d+(?:\.\d+)?/);
+      resolve({
+        ready: !placeholder,
+        mcVersion: m ? m[0] : null,
+        text: `${text} (protocol ${protocol}, players ${res.players.online}/${res.players.max})`
+      });
     });
   });
 }
 
-// Blocks until the real server is up; returns the target to connect to
+// Blocks until the server is up (or the ping keeps timing out); returns the target to connect to
 async function waitForServer(r) {
   let lastText = null;
   let lastLog = 0;
+  let timeouts = 0;
 
   while (!r.stopped) {
     const { host, port } = await resolveTarget();
-    if (!waitForServerOn) return { host, port };
+    if (!waitForServerOn) return { host, port, mcVersion: null };
 
     const status = await pingServer(host, port);
     serverReady = status.ready;
+
+    // Repeated ping timeouts usually mean the status port is slow, not that the server is off
+    timeouts = status.text.startsWith('ping timeout') ? timeouts + 1 : 0;
+    if (timeouts >= maxPingTimeouts) {
+      console.log(`[${r.name}] Ping timed out ${timeouts} times, trying to join anyway`);
+      return { host, port, mcVersion: null };
+    }
 
     if (status.ready) {
       if (lastText !== null) console.log(`[${r.name}] Server is up (${status.text}). Joining in ${readyDelay / 1000}s...`);
@@ -217,7 +227,7 @@ async function waitForServer(r) {
       if (r.stopped) return null;
       const again = await pingServer(host, port);
       serverReady = again.ready;
-      if (again.ready) return { host, port };
+      if (again.ready) return { host, port, mcVersion: again.mcVersion };
       continue;
     }
 
@@ -334,22 +344,24 @@ function pauseActivity(r, bot, home) {
 async function connectRunner(r) {
   if (r.stopped) return;
 
-  // Wait here until the real server is online
+  // Wait here until the server is online
   const target = await waitForServer(r);
   if (!target || r.stopped) return;
   const { host, port } = target;
-  console.log(`[${r.name}] Connecting to ${host}:${port}...`);
+  const useVersion = version || target.mcVersion || false;
+  console.log(`[${r.name}] Connecting to ${host}:${port} (version: ${useVersion || 'auto'})...`);
 
   const bot = mineflayer.createBot({
     host,
     port,
     username: r.name,
-    version,
+    version: useVersion,
     auth,
     checkTimeoutInterval: 60 * 1000
   });
   r.bot = bot;
   r.loggedIn = false;
+  r.movementOn = false;
   bot.physicsEnabled = false;
 
   const watchdog = setTimeout(() => {
@@ -363,6 +375,9 @@ async function connectRunner(r) {
     console.log(`[${r.name}] Logged in`);
   });
 
+  // Keep physics off until movement is meant to start (spawn/respawn can turn it back on)
+  bot.on('spawn', () => { if (!r.movementOn) bot.physicsEnabled = false; });
+
   if (serverPassword) {
     bot.on('messagestr', (msg) => {
       const m = msg.toLowerCase();
@@ -370,6 +385,11 @@ async function connectRunner(r) {
       else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
     });
   }
+
+  // Log server messages (queue notices, plugin messages)
+  bot.on('messagestr', (msg) => {
+    if (msg.trim()) console.log(`[${r.name}] [Chat]`, msg);
+  });
 
   bot.once('spawn', () => {
     console.log(`[${r.name}] Spawned`);
@@ -388,6 +408,7 @@ async function connectRunner(r) {
     r.physicsTimeout = setTimeout(() => {
       if (r.bot !== bot || !bot.entity) return;
       const home = bot.entity.position.clone();
+      r.movementOn = true;
       bot.physicsEnabled = true;
       console.log(`[${r.name}] Movement enabled`);
       begin(home);
@@ -416,7 +437,7 @@ function startRunner(name, immediate = false) {
   const delay = immediate ? 0 : rand(0, joinJitter);
   console.log(`[Scheduler] Starting ${name}${delay ? ` (joining in ${Math.round(delay / 1000)}s)` : ''}`);
   const r = {
-    name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000,
+    name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000, movementOn: false,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
     resumeTimeout: null, pauseInterval: null, reconnectTimeout: null,
     stableTimeout: null, startTimeout: null
