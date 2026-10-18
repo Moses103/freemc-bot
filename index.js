@@ -458,9 +458,9 @@ async function connectRunner(r) {
   bot.physicsEnabled = false;
 
   const watchdog = setTimeout(() => {
-    console.log(`[${r.name}] No login after 30s, retrying`);
+    console.log(`[${r.name}] No login after ${loginTimeout / 1000}s, retrying`);
     bot.end('login timeout');
-  }, 30000);
+  }, loginTimeout);
 
   bot.once('login', () => {
     clearTimeout(watchdog);
