@@ -2,7 +2,6 @@ const mineflayer = require('mineflayer');
 
 // ---------------- Config ----------------
 const HOST = 'stablesmp.playserver.pro';
-const PORT = 33838;
 const VERSION = '1.21.11';
 const BOT_NAMES = ['God_Of_War', 'Wemmbu', 'SpokeIsHere', 'FlameFrags', 'NightingGale', 'ParrotX'];
 
@@ -299,11 +298,10 @@ function clearActivity(r) {
 function connectRunner(r) {
   if (r.stopped) return;
 
-  console.log(`[${r.name}] Connecting to ${HOST}:${PORT}...`);
+  console.log(`[${r.name}] Connecting to ${HOST}...`);
 
   const bot = mineflayer.createBot({
     host: HOST,
-    port: PORT,
     username: r.name,
     version: VERSION,
     auth: 'offline',
