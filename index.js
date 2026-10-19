@@ -15,7 +15,7 @@ http.createServer((req, res) => {
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const forcePort = parseInt(process.env.FORCE_PORT || '0', 10); // FORCE_PORT=0 uses SRV/fallback instead
+const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // FORCE_PORT=0 uses SRV/fallback instead
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const version = process.env.MC_VERSION || '1.21.11';          // false = use the server's real version when known
