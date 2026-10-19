@@ -616,14 +616,3 @@ function tick() {
 console.log(`[Scheduler] Bots: ${BOT_NAMES.join(', ')}`);
 tick();
 setInterval(tick, 30000);
-
-// ---------------- Clean shutdown (redeploys) ----------------
-function shutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log(`[Shutdown] ${signal} received, disconnecting bots`);
-  for (const name of [...runners.keys()]) stopRunner(name);
-  setTimeout(() => process.exit(0), 1500);
-}
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
