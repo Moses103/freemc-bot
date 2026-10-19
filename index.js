@@ -471,7 +471,7 @@ async function connectRunner(r) {
     host,
     port,
     username: r.name,
-    version: false, // Force auto-detect so proxy version handshakes don't clash
+    version: 1.21.11, // Force auto-detect so proxy version handshakes don't clash
     auth,
     connect: directConnect(host, port),
     checkTimeoutInterval: 60 * 1000
