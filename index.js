@@ -1,41 +1,65 @@
 const mineflayer = require('mineflayer');
-const mc = require('minecraft-protocol');
-const dns = require('dns').promises;
+const http = require('http');
+const net = require('net');
 
 // ---------------- Config ----------------
-const domain = 'stablesmp.playserver.pro';
-const Port = 33838;
+const HOST = 'stablesmp.playserver.pro';
+const PORT = 33838;
+const VERSION = '1.21.11';
+const AUTH = 'offline';
 const BOT_NAMES = ['God_Of_War', 'Wemmbu', 'SpokeIsHere', 'FlameFrags', 'NightingGale', 'ParrotX'];
-const version = '1.21.11';
-const auth = 'offline';
-const enableMovement = true;
-const physicsDelay = 10000;
-const maxRadius = 6;
-const minInterval = 1000;
-const maxInterval = 6000;
-const pauseEvery = 60 * 60 * 1000;      // 1 hour
-const pauseFor = 3 * 60 * 1000;         // 3 minutes
-const joinJitter = 3 * 60 * 1000;
 
-// Waiting for the server to start
-const waitForServerOn = false;
-const forcePort = Port;
-const fallbackPort = Port;
-const checkInterval = 10000;
-const readyDelay = 5000;
-const maxPingTimeouts = 1;              // join anyway after this many ping timeouts in a row
-const loginTimeout = 30000;
-const pingTimeout = 5000;
+const ENABLE_MOVEMENT = true;
+const PHYSICS_DELAY = 10000;            // wait after spawn before moving
+const MAX_RADIUS = 6;                   // how far a bot wanders from its spawn point
+const MIN_INTERVAL = 1000;
+const MAX_INTERVAL = 6000;
+const PAUSE_EVERY = 60 * 60 * 1000;     // 1 hour
+const PAUSE_FOR = 3 * 60 * 1000;        // 3 minutes
+const LOGIN_TIMEOUT = 30000;
 
 const HOUR = 3600 * 1000;
-const WINDOW_H = 6;                         // each bot is online 6h per day
+const WINDOW_H = 6;                     // each bot is online 6h per day
 const WINDOW_MS = WINDOW_H * HOUR;
-const MARGIN_MS = 5 * 60 * 1000;            // join 5 min early / leave 5 min late for overlap
-const MIN_GAP_H = 2;                        // min time between two bots' start times
-const MAX_GAP_H = 5.5;                      // max gap between start times (guarantees coverage)
+const MARGIN_MS = 5 * 60 * 1000;        // join 5 min early / leave 5 min late for overlap
+const MIN_GAP_H = 2;                    // min time between two bots' start times
+const MAX_GAP_H = 5.5;                  // max gap between start times (guarantees coverage)
 
 if (BOT_NAMES.length < 5) {
   console.warn('[Config] Need at least 5 bots to cover 24h with 6h windows!');
+}
+
+// ---------------- HTTP health check (Railway) ----------------
+const HTTP_PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Minecraft Bots are operational.\n');
+}).listen(HTTP_PORT, () => console.log(`[HTTP] Listening on port ${HTTP_PORT}`));
+
+// ---------------- Helpers ----------------
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getActionInterval() {
+  return rand(MIN_INTERVAL, MAX_INTERVAL);
+}
+
+// Opens the socket ourselves so minecraft-protocol does not do its own SRV lookup
+function directConnect(host, port) {
+  return (client) => {
+    const socket = net.connect({ host, port });
+    client.setSocket(socket);
+    client.emit('connect');
+  };
+}
+
+function stopMoving(bot) {
+  ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].forEach((c) => {
+    try { bot.setControlState(c, false); } catch (_) {}
+  });
 }
 
 // ---------------- Daily schedule (UTC) ----------------
@@ -47,6 +71,7 @@ function hashStr(s) {
   }
   return h >>> 0;
 }
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -111,7 +136,7 @@ function getDaySchedule(dayStartMs) {
   const prevClosers = closersOf(dayStartMs - 24 * HOUR);
   const pool = shuffle(BOT_NAMES.filter((x) => !closers.includes(x)), rng);
 
-  // the bots that closed yesterday may still be online after midnight, so they can't open today
+  // bots that closed yesterday may still be online after midnight, so they can't open today
   if (prevClosers.includes(pool[0])) {
     const k = pool.findIndex((x) => !prevClosers.includes(x));
     if (k > 0) [pool[0], pool[k]] = [pool[k], pool[0]];
@@ -147,116 +172,7 @@ function wantedNow() {
   return wanted;
 }
 
-// ---------------- Helpers ----------------
-function rand(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function resolveTarget() {
-  if (forcePort) {
-    console.log(`[DNS] Using forced address ${domain}:${forcePort}`);
-    return { host: domain, port: forcePort };
-  }
-  try {
-    const records = await dns.resolveSrv(`_minecraft._tcp.${domain}`);
-    if (records.length) {
-      const r = records.sort((a, b) => a.priority - b.priority)[0];
-      console.log(`[DNS] SRV record found: ${r.name}:${r.port}`);
-      return { host: r.name, port: r.port };
-    }
-  } catch (e) {
-    console.log(`[DNS] No SRV record (${e.code}), using ${domain}:${fallbackPort}`);
-  }
-  return { host: domain, port: fallbackPort };
-}
-
-// ---------------- Server status check ----------------
-let serverReady = false; // last known state, used by the scheduler
-
-async function pingServer(host, port) {
-  let target = host;
-  try { target = (await dns.resolve4(host))[0] || host; } catch (_) { /* keep hostname */ }
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ready: false, text: 'ping timeout' }), pingTimeout);
-    mc.ping({ host: target, port }, (err, res) => {
-      clearTimeout(timer);
-      if (err || !res) return resolve({ ready: false, text: `unreachable (${err ? err.code || err.message : 'no response'})` });
-
-      const raw = (res.version && res.version.name) || '';
-      const text = raw.replace(/§./g, '').trim() || 'no status';
-      const protocol = res.version ? res.version.protocol : -1;
-      // Placeholder statuses (Sleeping, Queued, Starting...) use protocol -1
-      const placeholder = protocol <= 0 || /sleep|queue|start|offline|stopp|wait|load|hibern/i.test(text);
-      const m = text.match(/\d+\.\d+(?:\.\d+)?/);
-      resolve({
-        ready: !placeholder,
-        mcVersion: m ? m[0] : null,
-        text: `${text} (protocol ${protocol}, players ${res.players.online}/${res.players.max})`
-      });
-    });
-  });
-}
-
-// Blocks until the server is up (or the ping keeps timing out); returns the target to connect to
-async function waitForServer(r) {
-  let lastText = null;
-  let lastLog = 0;
-  let timeouts = 0;
-
-  while (!r.stopped) {
-    const { host, port } = await resolveTarget();
-    if (!waitForServerOn) return { host, port, mcVersion: null };
-
-    const status = await pingServer(host, port);
-    serverReady = status.ready;
-
-    // Repeated ping timeouts usually mean the status port is slow, not that the server is off
-    timeouts = status.text.startsWith('ping timeout') ? timeouts + 1 : 0;
-    if (timeouts >= maxPingTimeouts) {
-      console.log(`[${r.name}] Ping timed out ${timeouts} times, trying to join anyway`);
-      return { host, port, mcVersion: null };
-    }
-
-    if (status.ready) {
-      if (lastText !== null) console.log(`[${r.name}] Server is up (${status.text}). Joining in ${readyDelay / 1000}s...`);
-      await sleep(readyDelay);
-      if (r.stopped) return null;
-      const again = await pingServer(host, port);
-      serverReady = again.ready;
-      if (again.ready) return { host, port, mcVersion: again.mcVersion };
-      continue;
-    }
-
-    if (status.text !== lastText || Date.now() - lastLog > 5 * 60 * 1000) {
-      console.log(`[${r.name}] Waiting for server... status: ${status.text}`);
-      lastText = status.text;
-      lastLog = Date.now();
-    }
-    await sleep(checkInterval);
-  }
-  return null;
-}
-
-function stopMoving(bot) {
-  ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].forEach((c) => {
-    try { bot.setControlState(c, false); } catch (_) {}
-  });
-}
-
-// ---------------- Per-bot runner ----------------
-const runners = new Map(); // name -> runner state
-let emergencyName = null;
-
-function clearActivity(r) {
-  ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout', 'stableTimeout'].forEach((k) => {
-    if (r[k]) { clearTimeout(r[k]); r[k] = null; }
-  });
-  if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
-}
-
+// ---------------- Movement ----------------
 // Looks at the cell ahead in a given direction (yaw) and reports what's there
 function probe(bot, yaw, dist = 1.0) {
   const p = bot.entity.position;
@@ -269,8 +185,8 @@ function probe(bot, yaw, dist = 1.0) {
   const solid = (b) => b && b.boundingBox === 'block';
   const liquid = (b) => b && (b.name === 'water' || b.name === 'lava');
 
-  const step = solid(feet) && !solid(head) && !solid(top);                         // one-block step to jump onto
-  const blocked = solid(head) || (solid(feet) && solid(top));                      // wall or low ceiling
+  const step = solid(feet) && !solid(head) && !solid(top);                    // one-block step to jump onto
+  const blocked = solid(head) || (solid(feet) && solid(top));                 // wall or low ceiling
   const unsafe = liquid(feet) || liquid(below1) || (!solid(feet) && !solid(below1) && !solid(below2)); // liquid or 2+ drop
   return { blocked, step, unsafe };
 }
@@ -283,8 +199,8 @@ function pickHeading(bot, home, awayFrom) {
   for (let i = 0; i < 14; i++) {
     let yaw;
     if (awayFrom !== undefined) {
-      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2; // just hit something: turn roughly around
-    } else if (dist > maxRadius) {
+      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2;      // just hit something: turn roughly around
+    } else if (dist > MAX_RADIUS) {
       yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z)) + (Math.random() - 0.5) * 0.8; // head back to spawn
     } else {
       yaw = Math.random() * Math.PI * 2 - Math.PI;
@@ -379,13 +295,13 @@ function actionLoop(r, bot) {
 }
 
 function startActivity(r, bot, home) {
-  if (enableMovement && home) movementLoop(r, bot, home);
+  if (ENABLE_MOVEMENT && home) movementLoop(r, bot, home);
   actionLoop(r, bot);
 }
 
 function pauseActivity(r, bot, home) {
   if (r.bot !== bot || !bot.entity) return;
-  console.log(`[${r.name}] Pausing for ${pauseFor / 60000} min`);
+  console.log(`[${r.name}] Pausing for ${PAUSE_FOR / 60000} min`);
   if (r.moveTimeout) clearTimeout(r.moveTimeout);
   if (r.actionTimeout) clearTimeout(r.actionTimeout);
   r.moveTimeout = r.actionTimeout = null;
@@ -395,26 +311,32 @@ function pauseActivity(r, bot, home) {
     if (r.bot !== bot || !bot.entity) return;
     console.log(`[${r.name}] Resuming activity`);
     startActivity(r, bot, home);
-  }, pauseFor);
+  }, PAUSE_FOR);
 }
 
-async function connectRunner(r) {
+// ---------------- Per-bot runner ----------------
+const runners = new Map(); // name -> runner state
+let emergencyName = null;
+
+function clearActivity(r) {
+  ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout', 'stableTimeout'].forEach((k) => {
+    if (r[k]) { clearTimeout(r[k]); r[k] = null; }
+  });
+  if (r.pauseInterval) { clearInterval(r.pauseInterval); r.pauseInterval = null; }
+}
+
+function connectRunner(r) {
   if (r.stopped) return;
 
-  // Wait here until the server is online
-  const target = await waitForServer(r);
-  if (!target || r.stopped) return;
-  const { host, port } = target;
-  const useVersion = version || target.mcVersion || false;
-  console.log(`[${r.name}] Connecting to ${host}:${port} (version: ${useVersion || 'auto'})...`);
+  console.log(`[${r.name}] Connecting to ${HOST}:${PORT} (version ${VERSION})...`);
 
   const bot = mineflayer.createBot({
-    host,
-    port,
+    host: HOST,
+    port: PORT,
     username: r.name,
-    version: '1.21.11', // Force auto-detect so proxy version handshakes don't clash
-    auth,
-    connect: directConnect(host, port),
+    version: VERSION,
+    auth: AUTH,
+    connect: directConnect(HOST, PORT),
     checkTimeoutInterval: 60 * 1000
   });
   r.bot = bot;
@@ -423,9 +345,9 @@ async function connectRunner(r) {
   bot.physicsEnabled = false;
 
   const watchdog = setTimeout(() => {
-    console.log(`[${r.name}] No login after ${loginTimeout / 1000}s, retrying`);
+    console.log(`[${r.name}] No login after ${LOGIN_TIMEOUT / 1000}s, retrying`);
     bot.end('login timeout');
-  }, loginTimeout);
+  }, LOGIN_TIMEOUT);
 
   bot.once('login', () => {
     clearTimeout(watchdog);
@@ -436,15 +358,6 @@ async function connectRunner(r) {
   // Keep physics off until movement is meant to start (spawn/respawn can turn it back on)
   bot.on('spawn', () => { if (!r.movementOn) bot.physicsEnabled = false; });
 
-  if (serverPassword) {
-    bot.on('messagestr', (msg) => {
-      const m = msg.toLowerCase();
-      if (m.includes('/register')) bot.chat(`/register ${serverPassword} ${serverPassword}`);
-      else if (m.includes('/login')) bot.chat(`/login ${serverPassword}`);
-    });
-  }
-
-  // Log server messages (queue notices, plugin messages)
   bot.on('messagestr', (msg) => {
     if (msg.trim()) console.log(`[${r.name}] [Chat]`, msg);
   });
@@ -458,10 +371,10 @@ async function connectRunner(r) {
 
     const begin = (home) => {
       startActivity(r, bot, home);
-      r.pauseInterval = setInterval(() => pauseActivity(r, bot, home), pauseEvery);
+      r.pauseInterval = setInterval(() => pauseActivity(r, bot, home), PAUSE_EVERY);
     };
 
-    if (!enableMovement) return begin(null);
+    if (!ENABLE_MOVEMENT) return begin(null);
 
     r.physicsTimeout = setTimeout(() => {
       if (r.bot !== bot || !bot.entity) return;
@@ -470,7 +383,7 @@ async function connectRunner(r) {
       bot.physicsEnabled = true;
       console.log(`[${r.name}] Movement enabled`);
       begin(home);
-    }, physicsDelay);
+    }, PHYSICS_DELAY);
   });
 
   bot.on('kicked', (reason) => console.log(`[${r.name}] Kicked:`, JSON.stringify(reason)));
@@ -492,10 +405,10 @@ async function connectRunner(r) {
 
 function startRunner(name, immediate = false) {
   if (runners.has(name)) return;
-  // Increase initial jitter buffer to 15-45 seconds so bots never flood the proxy together
+  // Random 15-45s delay so bots never flood the proxy together
   const delay = immediate ? 0 : rand(15000, 45000);
   console.log(`[Scheduler] Starting ${name} (joining in ${Math.round(delay / 1000)}s)...`);
-  
+
   const r = {
     name, bot: null, loggedIn: false, stopped: false, reconnectDelay: 10000, movementOn: false,
     moveTimeout: null, actionTimeout: null, physicsTimeout: null,
@@ -529,8 +442,8 @@ function tick() {
   const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
   const scheduledOnline = loggedIn.some((n) => wanted.has(n));
 
-  // Safety net: if the server is up but nobody is online for 2+ minutes, add a backup bot.
-  if (loggedIn.length === 0 && serverReady) {
+  // Safety net: if nobody has been online for 2+ minutes, bring in a backup bot
+  if (loggedIn.length === 0) {
     if (!noneOnlineSince) noneOnlineSince = Date.now();
     if (!emergencyName && Date.now() - noneOnlineSince > 120000) {
       const spare = BOT_NAMES.filter((n) => !wanted.has(n));
@@ -557,3 +470,14 @@ function tick() {
 console.log(`[Scheduler] Bots: ${BOT_NAMES.join(', ')}`);
 tick();
 setInterval(tick, 30000);
+
+// ---------------- Clean shutdown (redeploys) ----------------
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Shutdown] ${signal} received, disconnecting bots`);
+  for (const name of [...runners.keys()]) stopRunner(name);
+  setTimeout(() => process.exit(0), 1500);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
