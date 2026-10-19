@@ -1,15 +1,11 @@
 const mineflayer = require('mineflayer');
-const http = require('http');
-const net = require('net');
 
 // ---------------- Config ----------------
 const HOST = 'stablesmp.playserver.pro';
 const PORT = 33838;
 const VERSION = '1.21.11';
-const AUTH = 'offline';
 const BOT_NAMES = ['God_Of_War', 'Wemmbu', 'SpokeIsHere', 'FlameFrags', 'NightingGale', 'ParrotX'];
 
-const ENABLE_MOVEMENT = true;
 const PHYSICS_DELAY = 10000;            // wait after spawn before moving
 const MAX_RADIUS = 6;                   // how far a bot wanders from its spawn point
 const MIN_INTERVAL = 1000;
@@ -21,39 +17,17 @@ const LOGIN_TIMEOUT = 30000;
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                     // each bot is online 6h per day
 const WINDOW_MS = WINDOW_H * HOUR;
-const MARGIN_MS = 5 * 60 * 1000;        // join 5 min early / leave 5 min late for overlap
-const MIN_GAP_H = 2;                    // min time between two bots' start times
+const MARGIN_MS = 5 * 60 * 1000;        // join 5 min early / leave 5 min late
+const MIN_GAP_H = 2;                    // min gap between two bots' start times
 const MAX_GAP_H = 5.5;                  // max gap between start times (guarantees coverage)
 
-if (BOT_NAMES.length < 5) {
-  console.warn('[Config] Need at least 5 bots to cover 24h with 6h windows!');
-}
-
-// ---------------- HTTP health check (Railway) ----------------
-const HTTP_PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Minecraft Bots are operational.\n');
-}).listen(HTTP_PORT, () => console.log(`[HTTP] Listening on port ${HTTP_PORT}`));
-
 // ---------------- Helpers ----------------
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function getActionInterval() {
   return rand(MIN_INTERVAL, MAX_INTERVAL);
-}
-
-// Opens the socket ourselves so minecraft-protocol does not do its own SRV lookup
-function directConnect(host, port) {
-  return (client) => {
-    const socket = net.connect({ host, port });
-    client.setSocket(socket);
-    client.emit('connect');
-  };
 }
 
 function stopMoving(bot) {
@@ -98,7 +72,7 @@ function firstStartHours(dayStartMs) {
   return seededRng('first:' + dayKey(dayStartMs))() * 1.5;
 }
 
-// The two bots that take the last two slots of a day (these windows can run past midnight)
+// The two bots that take the last two slots of a day (can run past midnight)
 function closersOf(dayStartMs) {
   const rng = seededRng('closers:' + dayKey(dayStartMs));
   return shuffle(BOT_NAMES, rng).slice(0, 2);
@@ -199,7 +173,7 @@ function pickHeading(bot, home, awayFrom) {
   for (let i = 0; i < 14; i++) {
     let yaw;
     if (awayFrom !== undefined) {
-      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2;      // just hit something: turn roughly around
+      yaw = awayFrom + Math.PI + (Math.random() - 0.5) * Math.PI * 1.2;      // hit something: turn roughly around
     } else if (dist > MAX_RADIUS) {
       yaw = Math.atan2(-(home.x - pos.x), -(home.z - pos.z)) + (Math.random() - 0.5) * 0.8; // head back to spawn
     } else {
@@ -287,15 +261,13 @@ function actionLoop(r, bot) {
         bot.setControlState('sneak', true);
         setTimeout(() => bot.entity && bot.setControlState('sneak', false), 800);
       }
-    } catch (err) {
-      console.log(`[${r.name}] Action failed:`, err.message);
-    }
+    } catch (_) {}
     actionLoop(r, bot);
   }, getActionInterval());
 }
 
 function startActivity(r, bot, home) {
-  if (ENABLE_MOVEMENT && home) movementLoop(r, bot, home);
+  movementLoop(r, bot, home);
   actionLoop(r, bot);
 }
 
@@ -316,7 +288,6 @@ function pauseActivity(r, bot, home) {
 
 // ---------------- Per-bot runner ----------------
 const runners = new Map(); // name -> runner state
-let emergencyName = null;
 
 function clearActivity(r) {
   ['moveTimeout', 'actionTimeout', 'physicsTimeout', 'resumeTimeout', 'stableTimeout'].forEach((k) => {
@@ -328,15 +299,14 @@ function clearActivity(r) {
 function connectRunner(r) {
   if (r.stopped) return;
 
-  console.log(`[${r.name}] Connecting to ${HOST}:${PORT} (version ${VERSION})...`);
+  console.log(`[${r.name}] Connecting to ${HOST}:${PORT}...`);
 
   const bot = mineflayer.createBot({
     host: HOST,
     port: PORT,
     username: r.name,
     version: VERSION,
-    auth: AUTH,
-    connect: directConnect(HOST, PORT),
+    auth: 'offline',
     checkTimeoutInterval: 60 * 1000
   });
   r.bot = bot;
@@ -358,10 +328,6 @@ function connectRunner(r) {
   // Keep physics off until movement is meant to start (spawn/respawn can turn it back on)
   bot.on('spawn', () => { if (!r.movementOn) bot.physicsEnabled = false; });
 
-  bot.on('messagestr', (msg) => {
-    if (msg.trim()) console.log(`[${r.name}] [Chat]`, msg);
-  });
-
   bot.once('spawn', () => {
     console.log(`[${r.name}] Spawned`);
     clearActivity(r);
@@ -369,20 +335,14 @@ function connectRunner(r) {
     // Only reset the reconnect backoff if the bot stays connected for a minute
     r.stableTimeout = setTimeout(() => { r.reconnectDelay = 10000; }, 60000);
 
-    const begin = (home) => {
-      startActivity(r, bot, home);
-      r.pauseInterval = setInterval(() => pauseActivity(r, bot, home), PAUSE_EVERY);
-    };
-
-    if (!ENABLE_MOVEMENT) return begin(null);
-
     r.physicsTimeout = setTimeout(() => {
       if (r.bot !== bot || !bot.entity) return;
       const home = bot.entity.position.clone();
       r.movementOn = true;
       bot.physicsEnabled = true;
       console.log(`[${r.name}] Movement enabled`);
-      begin(home);
+      startActivity(r, bot, home);
+      r.pauseInterval = setInterval(() => pauseActivity(r, bot, home), PAUSE_EVERY);
     }, PHYSICS_DELAY);
   });
 
@@ -403,10 +363,10 @@ function connectRunner(r) {
   });
 }
 
-function startRunner(name, immediate = false) {
+function startRunner(name) {
   if (runners.has(name)) return;
-  // Random 15-45s delay so bots never flood the proxy together
-  const delay = immediate ? 0 : rand(15000, 45000);
+  // Random 15-45s delay so bots never join the proxy at the same moment
+  const delay = rand(15000, 45000);
   console.log(`[Scheduler] Starting ${name} (joining in ${Math.round(delay / 1000)}s)...`);
 
   const r = {
@@ -432,52 +392,26 @@ function stopRunner(name) {
 }
 
 // ---------------- Scheduler ----------------
-let noneOnlineSince = null;
 let shuttingDown = false;
 
 function tick() {
   if (shuttingDown) return;
   const wanted = wantedNow();
-
-  const loggedIn = [...runners.values()].filter((r) => r.loggedIn).map((r) => r.name);
-  const scheduledOnline = loggedIn.some((n) => wanted.has(n));
-
-  // Safety net: if nobody has been online for 2+ minutes, bring in a backup bot
-  if (loggedIn.length === 0) {
-    if (!noneOnlineSince) noneOnlineSince = Date.now();
-    if (!emergencyName && Date.now() - noneOnlineSince > 120000) {
-      const spare = BOT_NAMES.filter((n) => !wanted.has(n));
-      if (spare.length) {
-        emergencyName = spare[rand(0, spare.length - 1)];
-        console.log(`[Scheduler] Nobody online, bringing in ${emergencyName} as backup`);
-      }
-    }
-  } else {
-    noneOnlineSince = null;
-  }
-  if (emergencyName && scheduledOnline) {
-    console.log(`[Scheduler] Scheduled bot is back, releasing backup ${emergencyName}`);
-    emergencyName = null;
-  }
-  if (emergencyName) wanted.add(emergencyName);
-
   for (const name of BOT_NAMES) {
-    if (wanted.has(name) && !runners.has(name)) startRunner(name, name === emergencyName);
+    if (wanted.has(name) && !runners.has(name)) startRunner(name);
     if (!wanted.has(name) && runners.has(name)) stopRunner(name);
   }
 }
 
-console.log(`[Scheduler] Bots: ${BOT_NAMES.join(', ')}`);
 tick();
 setInterval(tick, 30000);
 
 // ---------------- Clean shutdown (redeploys) ----------------
-function shutdown(signal) {
+function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[Shutdown] ${signal} received, disconnecting bots`);
   for (const name of [...runners.keys()]) stopRunner(name);
   setTimeout(() => process.exit(0), 1500);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
