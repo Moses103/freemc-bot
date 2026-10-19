@@ -19,6 +19,8 @@ const joinJitter = 3 * 60 * 1000;
 
 // Waiting for the server to start
 const waitForServerOn = false;
+const forcePort = Port;
+const fallbackPort = Port;
 const checkInterval = 10000;
 const readyDelay = 5000;
 const maxPingTimeouts = 1;              // join anyway after this many ping timeouts in a row
@@ -34,44 +36,6 @@ const MAX_GAP_H = 5.5;                      // max gap between start times (guar
 
 if (BOT_NAMES.length < 5) {
   console.warn('[Config] Need at least 5 bots to cover 24h with 6h windows!');
-}
-
-// ---------------- Startup network diagnostics ----------------
-https.get('https://api.ipify.org', (res) => {
-  let ip = '';
-  res.on('data', (d) => (ip += d));
-  res.on('end', () => console.log('[Net] Outbound IP:', ip));
-}).on('error', (e) => console.log('[Net] IP lookup failed:', e.code || e.message));
-
-function tcpTest(host, port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host, port });
-    s.setTimeout(8000);
-    s.on('connect', () => { s.destroy(); resolve('OPEN'); });
-    s.on('timeout', () => { s.destroy(); resolve('TIMEOUT'); });
-    s.on('error', (e) => resolve(e.code || e.message));
-  });
-}
-
-// Opens the socket ourselves so minecraft-protocol does NOT do its own SRV lookup
-// (the SRV record can point to port 33838, which Railway can't reach)
-function directConnect(host, port) {
-  return (client) => {
-    const socket = net.connect({ host, port });
-    client.setSocket(socket);
-    client.emit('connect');
-  };
-}
-
-(async () => {
-  for (const p of [25565, 33838]) {
-    console.log(`[Net] TCP ${domain}:${p} ->`, await tcpTest(domain, p));
-  }
-})();
-
-// Random interval, picked fresh every time it's used
-function getActionInterval() {
-  return Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
 }
 
 // ---------------- Daily schedule (UTC) ----------------
