@@ -5,8 +5,11 @@
   "scripts": {
     "start": "node index.js"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "mineflayer": "^4.23.0"
+    "mineflayer": "latest",
+    "minecraft-protocol": "latest"
   }
 }
