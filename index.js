@@ -13,30 +13,31 @@ http.createServer((req, res) => {
 }).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
 // ---------------- Config ----------------
-const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
-const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // FORCE_PORT=0 uses SRV/fallback instead
-const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
-  .split(',').map((s) => s.trim()).filter(Boolean);
-const version = process.env.MC_VERSION || '1.21.11';          // false = use the server's real version when known
-const auth = process.env.AUTH || 'offline';
-const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
-const enableMovement = process.env.MOVEMENT !== 'false';
-const physicsDelay = parseInt(process.env.PHYSICS_DELAY || '10000', 10);
-const maxRadius = parseInt(process.env.MAX_RADIUS || '6', 10);
-const minInterval = parseInt(process.env.MIN_INTERVAL || '1000', 10);
-const maxInterval = parseInt(process.env.MAX_INTERVAL || '6000', 10);
-const pauseEvery = parseInt(process.env.PAUSE_EVERY || String(60 * 60 * 1000), 10); // 1 hour
-const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);      // 3 minutes
-const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
+const domain = 'stablesmp.playserver.pro';
+const fallbackPort = 33838;
+const forcePort = 25565;                // Railway can't reach 33838
+const BOT_NAMES = ['God_Of_War', 'Wemmbu', 'SpokeIsHere', 'FlameFrags', 'NightingGale', 'ParrotX'];
+const version = '1.21.11';
+const auth = 'offline';
+const serverPassword = '';              // only if the server uses /login
+const enableMovement = true;
+const physicsDelay = 10000;
+const maxRadius = 6;
+const minInterval = 1000;
+const maxInterval = 6000;
+const pauseEvery = 60 * 60 * 1000;      // 1 hour
+const pauseFor = 3 * 60 * 1000;         // 3 minutes
+const joinJitter = 3 * 60 * 1000;
 
 // Waiting for the server to start
-const waitForServerOn = process.env.WAIT_FOR_SERVER || 'true'; // set false to join without checking
-const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
-const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
-const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '2', 10); // join anyway after this many timeouts in a row
-const loginTimeout = parseInt(process.env.LOGIN_TIMEOUT || '120000', 10); // how long to wait for a login (queue/startup can be slow)
-const pingTimeout = parseInt(process.env.PING_TIMEOUT || '20000', 10);
+const waitForServerOn = true;
+const checkInterval = 30000;
+const readyDelay = 5000;
+const maxPingTimeouts = 1;              // join anyway after this many ping timeouts in a row
+const loginTimeout = 120000;
+const pingTimeout = 20000;
+
+console.log('[Config] forcePort =', forcePort, '| domain =', domain);
 
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                         // each bot is online 6h per day
