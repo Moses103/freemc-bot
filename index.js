@@ -7,10 +7,6 @@ const net = require('net');
 
 // HTTP server for Railway health checks
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Minecraft Bots are operational.\n');
-}).listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
 
 // ---------------- Config ----------------
 const domain = 'stablesmp.playserver.pro';
@@ -38,6 +34,19 @@ const loginTimeout = 120000;
 const pingTimeout = 20000;
 
 console.log('[Config] forcePort =', forcePort, '| domain =', domain);
+(async () => {
+  for (const p of [25565, 33838]) {
+    const res = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve('timeout'), 15000);
+      mc.ping({ host: domain, port: p }, (err, r) => {
+        clearTimeout(t);
+        if (err || !r) return resolve('error: ' + (err && (err.code || err.message)));
+        resolve(`${r.version && r.version.name} (protocol ${r.version && r.version.protocol}, players ${r.players.online}/${r.players.max})`);
+      });
+    });
+    console.log(`[Diag] Ping ${domain}:${p} ->`, res);
+  }
+})();
 
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                         // each bot is online 6h per day
