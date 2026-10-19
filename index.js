@@ -18,7 +18,7 @@ const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
 const forcePort = parseInt(process.env.FORCE_PORT || '0', 10); // FORCE_PORT=0 uses SRV/fallback instead
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const version = process.env.MC_VERSION || 1.21.11;          // false = use the server's real version when known
+const version = process.env.MC_VERSION || '1.21.11';          // false = use the server's real version when known
 const auth = process.env.AUTH || 'offline';
 const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';
