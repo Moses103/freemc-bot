@@ -26,7 +26,7 @@ const pauseFor = 3 * 60 * 1000;         // 3 minutes
 const joinJitter = 3 * 60 * 1000;
 
 // Waiting for the server to start
-const waitForServerOn = true;
+const waitForServerOn = false;
 const checkInterval = 30000;
 const readyDelay = 5000;
 const maxPingTimeouts = 1;              // join anyway after this many ping timeouts in a row
