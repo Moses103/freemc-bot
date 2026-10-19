@@ -15,10 +15,10 @@ http.createServer((req, res) => {
 // ---------------- Config ----------------
 const domain = process.env.SERVER_HOST || 'stablesmp.playserver.pro';
 const fallbackPort = parseInt(process.env.SERVER_PORT || '33838', 10);
-const forcePort = parseInt(process.env.FORCE_PORT || '25565', 10); // FORCE_PORT=0 uses SRV/fallback instead
+const forcePort = parseInt(process.env.FORCE_PORT || '0', 10); // FORCE_PORT=0 uses SRV/fallback instead
 const BOT_NAMES = (process.env.BOT_NAMES || 'God_Of_War,Wemmbu,SpokeIsHere,FlameFrags,NightingGale,ParrotX')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const version = process.env.MC_VERSION || false;          // false = use the server's real version when known
+const version = process.env.MC_VERSION || 1.21.11;          // false = use the server's real version when known
 const auth = process.env.AUTH || 'offline';
 const serverPassword = process.env.BOT_PASSWORD || '';    // only if server uses /login
 const enableMovement = process.env.MOVEMENT !== 'false';
@@ -31,10 +31,10 @@ const pauseFor = parseInt(process.env.PAUSE_FOR || String(3 * 60 * 1000), 10);  
 const joinJitter = parseInt(process.env.JOIN_JITTER || String(3 * 60 * 1000), 10);  // random 0-3 min delay when joining
 
 // Waiting for the server to start
-const waitForServerOn = process.env.WAIT_FOR_SERVER == 'true'; // set false to join without checking
+const waitForServerOn = process.env.WAIT_FOR_SERVER || 'true'; // set false to join without checking
 const checkInterval = parseInt(process.env.CHECK_INTERVAL || '30000', 10);
 const readyDelay = parseInt(process.env.READY_DELAY || '5000', 10);
-const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '1', 10); // join anyway after this many timeouts in a row
+const maxPingTimeouts = parseInt(process.env.MAX_PING_TIMEOUTS || '2', 10); // join anyway after this many timeouts in a row
 const loginTimeout = parseInt(process.env.LOGIN_TIMEOUT || '120000', 10); // how long to wait for a login (queue/startup can be slow)
 const pingTimeout = parseInt(process.env.PING_TIMEOUT || '20000', 10);
 
