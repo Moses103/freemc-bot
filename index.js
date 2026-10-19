@@ -1,21 +1,13 @@
 const mineflayer = require('mineflayer');
 const mc = require('minecraft-protocol');
 const dns = require('dns').promises;
-const http = require('http');
-const https = require('https');
-const net = require('net');
-
-// HTTP server for Railway health checks
-const PORT = process.env.PORT || 3000;
 
 // ---------------- Config ----------------
 const domain = 'stablesmp.playserver.pro';
-const fallbackPort = 33838;
-const forcePort = 25565;                // Railway can't reach 33838
+const Port = 33838;
 const BOT_NAMES = ['God_Of_War', 'Wemmbu', 'SpokeIsHere', 'FlameFrags', 'NightingGale', 'ParrotX'];
 const version = '1.21.11';
 const auth = 'offline';
-const serverPassword = '';              // only if the server uses /login
 const enableMovement = true;
 const physicsDelay = 10000;
 const maxRadius = 6;
@@ -27,26 +19,11 @@ const joinJitter = 3 * 60 * 1000;
 
 // Waiting for the server to start
 const waitForServerOn = false;
-const checkInterval = 30000;
+const checkInterval = 10000;
 const readyDelay = 5000;
 const maxPingTimeouts = 1;              // join anyway after this many ping timeouts in a row
-const loginTimeout = 120000;
-const pingTimeout = 20000;
-
-console.log('[Config] forcePort =', forcePort, '| domain =', domain);
-(async () => {
-  for (const p of [25565, 33838]) {
-    const res = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve('timeout'), 15000);
-      mc.ping({ host: domain, port: p }, (err, r) => {
-        clearTimeout(t);
-        if (err || !r) return resolve('error: ' + (err && (err.code || err.message)));
-        resolve(`${r.version && r.version.name} (protocol ${r.version && r.version.protocol}, players ${r.players.online}/${r.players.max})`);
-      });
-    });
-    console.log(`[Diag] Ping ${domain}:${p} ->`, res);
-  }
-})();
+const loginTimeout = 30000;
+const pingTimeout = 5000;
 
 const HOUR = 3600 * 1000;
 const WINDOW_H = 6;                         // each bot is online 6h per day
